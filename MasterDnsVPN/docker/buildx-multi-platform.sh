@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "${SCRIPT_DIR}"
+cd "${SCRIPT_DIR}/.."
 
 RELEASE_TAG="${RELEASE_TAG:-latest}"
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm/v5,linux/arm/v7,linux/arm64/v8,linux/mips64le}"
@@ -82,8 +82,9 @@ docker buildx build \
   --platform "${PLATFORMS}" \
   --build-arg RELEASE_TAG="${RELEASE_TAG}" \
   --build-arg RELEASE_SHA256="${RELEASE_SHA256}" \
+  --build-arg GH_TOKEN="${GHCR_TOKEN:-}" \
   "${TAG_ARGS[@]}" \
-  -f Dockerfile \
+  -f docker/Dockerfile \
   --push \
   .
 

@@ -30,28 +30,37 @@ func (s *Server) handlePacket(packet []byte) []byte {
 		return s.buildNoDataResponseLogged(packet, "request-parse-failed")
 	}
 
+	return s.handleParsedPacket(packet, parsed, nil)
+}
+
+func (s *Server) handleParsedPacket(packet []byte, parsed DnsParser.LitePacket, err error) []byte {
+	if err != nil || parsed.Header.QR != 0 {
+		return nil
+	}
+
 	if !parsed.HasQuestion {
 		return s.buildNoDataResponseLogged(packet, "request-has-no-question")
 	}
 
 	decision := s.domainMatcher.Match(parsed)
-	if decision.Action == domainMatcher.ActionProcess {
+	switch decision.Action {
+	case domainMatcher.ActionProcess:
 		response := s.handleTunnelCandidate(packet, parsed, decision)
 		if response != nil {
 			return response
 		}
 
 		return s.buildNoDataResponseLiteLogged(packet, parsed, "domain-match-process-failed")
-	}
-
-	if decision.Action == domainMatcher.ActionFormatError || decision.Action == domainMatcher.ActionNoData {
-		if s.log != nil {
-			s.log.Debugf("Domain match rejected: reason=%s, reqName=%s, base=%s, labels=%s, qtype=%d", decision.Reason, decision.RequestName, decision.BaseDomain, decision.Labels, decision.QuestionType)
+	case domainMatcher.ActionFormatError:
+		return s.buildFormatErrorResponseLiteLogged(packet, parsed, decision.Reason)
+	case domainMatcher.ActionNoData:
+		if decision.Reason == "unauthorized-domain" {
+			return s.buildNameErrorResponseLiteLogged(packet, parsed, decision.Reason)
 		}
-		return s.buildNoDataResponseLiteLogged(packet, parsed, "domain-match-no-data")
+		return s.buildNoDataResponseLiteLogged(packet, parsed, decision.Reason)
+	default:
+		return s.buildNoDataResponseLiteLogged(packet, parsed, "domain-match-unknown-action")
 	}
-
-	return s.buildNoDataResponseLiteLogged(packet, parsed, "domain-match-no-data")
 }
 
 func extractClientEmail(requestName string, baseDomain string) string {
@@ -95,7 +104,6 @@ func extractEncLabels(requestName string, email string, baseDomain string) strin
 	}
 	return localStripLabelDots(encLabels)
 }
-
 func (s *Server) handleTunnelCandidate(packet []byte, parsed DnsParser.LitePacket, decision domainMatcher.Decision) []byte {
 	// 1. Dynamic authentication via SQLite
 	email := extractClientEmail(decision.RequestName, decision.BaseDomain)

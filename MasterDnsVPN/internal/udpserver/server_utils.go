@@ -44,6 +44,22 @@ func buildNoDataResponseLite(packet []byte, parsed DnsParser.LitePacket) []byte 
 	return response
 }
 
+func buildNameErrorResponseLite(packet []byte, parsed DnsParser.LitePacket) []byte {
+	response, err := DnsParser.BuildNameErrorResponseFromLite(packet, parsed)
+	if err != nil {
+		return nil
+	}
+	return response
+}
+
+func buildFormatErrorResponseLite(packet []byte, parsed DnsParser.LitePacket) []byte {
+	response, err := DnsParser.BuildFormatErrorResponseFromLite(packet, parsed)
+	if err != nil {
+		return nil
+	}
+	return response
+}
+
 func (s *Server) buildNoDataResponseLogged(packet []byte, reason string) []byte {
 	if s.log != nil && s.log.Enabled(logger.LevelDebug) {
 		s.log.Debugf("Dropping packet (NoData). Reason: %s", reason)
@@ -58,6 +74,14 @@ func (s *Server) buildNoDataResponseLiteLogged(packet []byte, parsed DnsParser.L
 		}
 	}
 	return buildNoDataResponseLite(packet, parsed)
+}
+
+func (s *Server) buildNameErrorResponseLiteLogged(packet []byte, parsed DnsParser.LitePacket, reason string) []byte {
+	return buildNameErrorResponseLite(packet, parsed)
+}
+
+func (s *Server) buildFormatErrorResponseLiteLogged(packet []byte, parsed DnsParser.LitePacket, reason string) []byte {
+	return buildFormatErrorResponseLite(packet, parsed)
 }
 
 func isClosedStreamAwarePacketType(packetType uint8) bool {

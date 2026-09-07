@@ -6,7 +6,7 @@ DATA_DIR="${DATA_DIR:-/data}"
 CONFIG_FILE="${CONFIG_FILE:-server_config.toml}"
 KEY_FILE="${KEY_FILE:-encrypt_key.txt}"
 BIN="${APP_DIR}/masterdnsvpn"
-SAMPLE_URL="https://raw.githubusercontent.com/masterking32/MasterDnsVPN/main/server_config.toml.simple"
+SAMPLE_URL="https://raw.githubusercontent.com/NullCoreDeveloper/MasterDnsVPN/main/server_config.toml.simple"
 
 mkdir -p "${APP_DIR}" "${DATA_DIR}"
 cd "${APP_DIR}"

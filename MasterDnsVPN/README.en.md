@@ -1,14 +1,14 @@
 ﻿# MasterDnsVPN Project 🔐
 
-## | [نسخه فارسی](https://github.com/masterking32/MasterDnsVPN/blob/main/README_FA.MD) | [English Version](https://github.com/masterking32/MasterDnsVPN/blob/main/README.MD) |
+## | 🇮🇷 [فارسی](https://github.com/masterking32/MasterDnsVPN/blob/main/README_FA.MD) | 🇬🇧 [English](https://github.com/masterking32/MasterDnsVPN/blob/main/README.MD) | 🇷🇺 [Русский](https://github.com/masterking32/MasterDnsVPN/blob/main/README_RU.MD) | 🇨🇳 [中文](https://github.com/masterking32/MasterDnsVPN/blob/main/README_ZH.MD) | 🇪🇸 [Español](https://github.com/masterking32/MasterDnsVPN/blob/main/README_ES.MD) | 🇮🇹 [Italiano](https://github.com/masterking32/MasterDnsVPN/blob/main/README_IT.MD) |
 
 **MasterDnsVPN** is a scientific and research-oriented project for carrying TCP traffic through DNS queries and responses. In broad goal, it is similar to projects such as DNSTT or SlipStream, but it follows a fundamentally different structure and implementation approach.
 This system is designed around compatibility with many resolver behaviors and harsh network conditions, with the goal of preserving the highest possible stability and data delivery even in the worst cases.
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/masterking32/MasterDnsVPN)
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/masterking32/MasterDnsVPN) [![oosmetrics](https://api.oosmetrics.com/api/v1/badge/achievement/5c7b2ce0-0af6-4648-8ded-fd1e847096cd.svg)](https://oosmetrics.com/repo/masterking32/MasterDnsVPN)
-
-<a href="https://trendshift.io/repositories/23688" target="_blank"><img src="https://trendshift.io/api/badge/repositories/23688" alt="masterking32%2FMasterDnsVPN | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+<a href="https://trendshift.io/repositories/23688" target="_blank"><img src="https://trendshift.io/api/badge/repositories/23688" alt="masterking32%2FMasterDnsVPN | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a> <a href="https://trendshift.io/repositories/23688?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-23688" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/23688/daily?language=Go" alt="masterking32%2FMasterDnsVPN | Trendshift" width="250" height="55"/></a> <a href="https://trendshift.io/repositories/23688?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-23688" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/23688/weekly?language=Go" alt="masterking32%2FMasterDnsVPN | Trendshift" width="250" height="55"/></a> <a href="https://trendshift.io/repositories/23688?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-23688" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/23688/monthly?language=Go" alt="masterking32%2FMasterDnsVPN | Trendshift" width="250" height="55"/></a>
+<a href="https://sourceforge.net/projects/masterdnsvpn/" target="_blank" rel="noopener noreferrer"><img src="https://a.fsdn.com/con/app/syndication/badge_img_direct/oss-rising-star/oss-rising-star/?variant_id=sf" alt="MasterDnsVPN | SourceForge" width="55" height="55"/></a>
 
 ### 📊 MasterDnsVPN Compared with Similar Projects
 
@@ -109,7 +109,7 @@ This list is only a high-level summary. The related sections below explain each 
 
 MasterDnsVPN isn't just a theoretical project. It is battle-tested and proven to work in environments where the global internet is completely severed.
 
-Recently, during a 70+ day internet blackout in Iran, authorities didn't just block VPNs or filter websites—they completely pulled the plug on international bandwidth. With 99% of the connection to the outside world physically cut off, users were trapped inside a closed, local intranet. 
+Recently, during the 88-day internet blackout in Iran, authorities didn't just block VPNs or filter websites—they completely pulled the plug on international bandwidth. With 99% of the connection to the outside world physically cut off, users were trapped inside a closed, local intranet. 
 
 Standard circumvention tools are useless when there is no international internet to connect to. Yet, during this massive shutdown, MasterDnsVPN stood out as one of the very few lifelines that actually kept users connected to the global web.
 
@@ -715,13 +715,14 @@ These settings are critical on the server:
 
 | Parameter | Sample Value | Allowed Values / Real Behavior | Full Explanation |
 | :--- | :--- | :--- | :--- |
-| `UDP_HOST` | `"0.0.0.0"` | if empty, this value is used | Address where the DNS server binds.<br>`0.0.0.0` means listen on all interfaces. |
+| `UDP_HOST` | `""` | empty for the family-neutral wildcard, or an unbracketed IP literal | Address where the DNS server binds.<br>The empty default lets Go choose a generic UDP wildcard. It accepts IPv4 and IPv6 through one socket where IPv4-mapped IPv6 is supported; otherwise Go selects an available family. Explicit `0.0.0.0` and `::` wildcards retain their IPv4 or IPv6 family where mapped dual-stack sockets are unavailable. A concrete address restricts the listener to that family. |
 | `UDP_PORT` | `53` | `1..65535` | UDP port used by the server.<br>In most deployments this should remain `53` so resolvers can query it directly. |
+| `FALLBACK` | omitted | empty/off, or `HOST:PORT`; bracket IPv6 addresses | Optional raw UDP proxy for non-DNS datagrams received on the DNS listener. Routing is tracked per source, and only a structurally complete DNS datagram establishes or resets DNS classification. An unknown non-DNS source is forwarded immediately and remains sticky to fallback, while a DNS-classified source switches after 16 consecutive non-DNS packets. While the source remains DNS-classified, every packet retained on the DNS path refreshes its 180-second idle timer; DNS resets the non-DNS streak and non-DNS increments it. After a gap longer than 180 seconds, the next non-DNS packet is treated as a new source and forwarded immediately. Active fallback sessions also expire after 180 seconds without traffic in either direction. Fallback mode uses one ingress reader to preserve packet order and a full 65,535-byte receive buffer; startup rejects a target that resolves back to the listener. Sessions have no hard cap, so untrusted or spoofed traffic can consume file descriptors and CPU; use network filtering or rate limiting on public listeners. |
 | `UDP_READERS` | `4` | auto-default if `<=0` | Number of goroutines reading directly from the UDP socket.<br>A larger number may help on very busy servers, but beyond a point it only increases context switching. |
 | `DNS_REQUEST_WORKERS` | `8` | auto-default if `<=0` | Number of workers that take requests from the front-door queue and pass them into the session/decode layer. |
 | `MAX_CONCURRENT_REQUESTS` | `16384` | fallback if `<=0` | Capacity of the incoming request queue.<br>If this queue fills up, packets are dropped and the server emits rate-limited overload logs. |
 | `SOCKET_BUFFER_SIZE` | `4194304` | fallback if `<=0` | Operating-system socket buffer size request for the UDP listener.<br>This matters for heavy bursts of incoming traffic. |
-| `MAX_PACKET_SIZE` | `65535` | fallback if `<=0` | Size of the largest packet buffer that the packet pool allocates. |
+| `MAX_PACKET_SIZE` | `65535` | fallback if `<=0`; at least `65535` with `FALLBACK` | Size of the largest packet buffer that the packet pool allocates. Fallback forces a full-size UDP receive buffer so raw datagrams are not truncated. |
 | `DROP_LOG_INTERVAL_SECONDS` | `2.0` | fallback if `<=0` | Minimum interval between repeated overload/drop logs, to avoid log spam during pressure. |
 
 ### 3.5.3) 🧠 Deferred Session Runtime

@@ -16,7 +16,7 @@
     <string name="toast_permission_denied">Unable to obtain the permission</string>
     <string name="toast_permission_denied_notification">Unable to obtain the notification permission</string>
     <string name="notification_action_more">Click for more</string>
-    <string name="notification_mdns_active">MasterDNSVPN is active</string>
+    <string name="notification_mdns_active">NullDnsTunneling is active</string>
     <string name="toast_services_start">Start Services</string>
     <string name="toast_services_stop">Stop Services</string>
     <string name="toast_services_success">Start Services Success</string>
@@ -41,7 +41,7 @@
     <string name="menu_item_import_config_manually_trojan">Add [Trojan]</string>
     <string name="menu_item_import_config_manually_wireguard">Add [Wireguard]</string>
     <string name="menu_item_import_config_manually_hysteria2">Add [Hysteria2]</string>
-    <string name="menu_item_import_config_manually_mdns">Add [MasterDNSVPN]</string>
+    <string name="menu_item_import_config_manually_mdns">Add [NullDnsTunneling]</string>
     <string name="del_config_comfirm">Confirm delete ?</string>
     <string name="del_invalid_config_comfirm">Please test before deleting! Confirm delete ?</string>
     <string name="server_lab_remarks">remarks</string>

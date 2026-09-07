@@ -658,7 +658,7 @@ object AngConfigManager {
             } catch (e: Exception) {
                 // Ignore, fallback
             }
-            return "MasterDNSVPN"
+            return "NullDnsTunneling"
         }
 
         // Hide xxx:xxx:***/xxx.xxx.xxx.***

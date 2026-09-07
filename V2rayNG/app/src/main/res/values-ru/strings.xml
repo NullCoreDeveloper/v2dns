@@ -15,7 +15,7 @@
     <string name="toast_permission_denied">Разрешение не получено</string>
     <string name="toast_permission_denied_notification">Разрешение на отображение уведомлений не получено</string>
     <string name="notification_action_more">Ещё…</string>
-    <string name="notification_mdns_active">Служба MasterDNSVPN активна</string>
+    <string name="notification_mdns_active">Служба NullDnsTunneling активна</string>
     <string name="toast_services_start">Запуск служб</string>
     <string name="toast_services_stop">Остановка служб</string>
     <string name="toast_services_success">Службы успешно запущены</string>
@@ -40,7 +40,7 @@
     <string name="menu_item_import_config_manually_trojan">Добавить Trojan</string>
     <string name="menu_item_import_config_manually_wireguard">Добавить WireGuard</string>
     <string name="menu_item_import_config_manually_hysteria2">Добавить Hysteria2</string>
-    <string name="menu_item_import_config_manually_mdns">Добавить [MasterDNSVPN]</string>
+    <string name="menu_item_import_config_manually_mdns">Добавить [NullDnsTunneling]</string>
     <string name="del_config_comfirm">Подтверждаете удаление?</string>
     <string name="del_invalid_config_comfirm">Выполните проверку перед удалением! Подтверждаете удаление?</string>
     <string name="server_lab_remarks">Название</string>

@@ -94,11 +94,11 @@ class ServerCustomConfigActivity : BaseActivity() {
                 return false
             }
             binding.etRemarks.text.let {
-                config.remarks = if (it.isNullOrEmpty()) "MasterDNSVPN" else it.toString()
+                config.remarks = if (it.isNullOrEmpty()) "NullDnsTunneling" else it.toString()
             }
             config.server = "127.0.0.1"
             config.serverPort = "10808"
-            config.description = "MasterDNSVPN client configuration"
+            config.description = "NullDnsTunneling client configuration"
         } else {
             val profileItem = try {
                 CustomFmt.parse(binding.editor.text.toString())

@@ -16,7 +16,7 @@ object MdnsFmt : FmtBase() {
     fun parse(str: String): ProfileItem? {
         try {
             var rawUri = str
-            var remarks = "MasterDNSVPN"
+            var remarks = "NullDnsTunneling"
 
             val hashIdx = str.indexOf('#')
             if (hashIdx >= 0) {
@@ -40,7 +40,7 @@ object MdnsFmt : FmtBase() {
             config.remarks = remarks
             config.server = "127.0.0.1"
             config.serverPort = "10808"
-            config.description = "MasterDNSVPN client configuration"
+            config.description = "NullDnsTunneling client configuration"
             config.mdnsRawConfig = rawJson
 
             return config

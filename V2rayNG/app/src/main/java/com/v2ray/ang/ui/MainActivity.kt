@@ -388,7 +388,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
   ]
 }"""
             val profile = ProfileItem.create(EConfigType.MDNS)
-            profile.remarks = "MasterDNSVPN"
+            profile.remarks = "NullDnsTunneling"
             profile.server = "127.0.0.1"
             profile.serverPort = "10808"
             profile.subscriptionId = mainViewModel.subscriptionId

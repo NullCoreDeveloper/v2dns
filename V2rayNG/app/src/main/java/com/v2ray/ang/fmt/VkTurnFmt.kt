@@ -46,6 +46,39 @@ object VkTurnFmt : FmtBase() {
             config.description = "VK TURN -> $targetProtocol ($server:$port)"
             config.vkTurnRawConfig = rawJson
 
+            if (jsonObject.has("clientId") && !jsonObject.get("clientId").isJsonNull) {
+                config.password = jsonObject.get("clientId").asString
+            } else if (jsonObject.has("clientPassword") && !jsonObject.get("clientPassword").isJsonNull) {
+                config.password = jsonObject.get("clientPassword").asString
+            }
+            if (jsonObject.has("flow") && !jsonObject.get("flow").isJsonNull) {
+                config.flow = jsonObject.get("flow").asString
+            }
+            if (jsonObject.has("method") && !jsonObject.get("method").isJsonNull) {
+                config.method = jsonObject.get("method").asString
+            } else {
+                config.method = "none"
+            }
+            if (jsonObject.has("network") && !jsonObject.get("network").isJsonNull) {
+                config.network = jsonObject.get("network").asString
+            } else {
+                config.network = "tcp"
+            }
+            if (jsonObject.has("security") && !jsonObject.get("security").isJsonNull) {
+                config.security = jsonObject.get("security").asString
+            } else {
+                config.security = "none"
+            }
+            if (jsonObject.has("sni") && !jsonObject.get("sni").isJsonNull) {
+                config.sni = jsonObject.get("sni").asString
+            }
+            if (jsonObject.has("path") && !jsonObject.get("path").isJsonNull) {
+                config.path = jsonObject.get("path").asString
+            }
+            if (jsonObject.has("host") && !jsonObject.get("host").isJsonNull) {
+                config.host = jsonObject.get("host").asString
+            }
+
             return config
         } catch (e: Exception) {
             return null

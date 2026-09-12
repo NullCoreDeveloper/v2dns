@@ -32,6 +32,7 @@ object CoreOutboundBuilder {
             EConfigType.WIREGUARD -> toOutboundWireguard(profileItem)
             EConfigType.HYSTERIA2 -> toOutboundHysteria2(profileItem)
             EConfigType.HTTP -> toOutboundHttp(profileItem)
+            EConfigType.VKTURN -> toOutboundVkTurn(profileItem)
             else -> null
         }
 
@@ -250,6 +251,87 @@ object CoreOutboundBuilder {
         }
 
         return outboundBean
+    }
+
+    private fun toOutboundVkTurn(profileItem: ProfileItem): OutboundBean? {
+        val rawJson = profileItem.vkTurnRawConfig
+        var targetProtocol = "vless"
+        if (!rawJson.isNullOrEmpty()) {
+            try {
+                val jsonObject = com.google.gson.JsonParser.parseString(rawJson).asJsonObject
+                if (jsonObject.has("targetProtocol") && !jsonObject.get("targetProtocol").isJsonNull) {
+                    targetProtocol = jsonObject.get("targetProtocol").asString.lowercase()
+                }
+            } catch (e: Exception) {
+                LogUtil.e(AppConfig.TAG, "toOutboundVkTurn parse error", e)
+            }
+        }
+
+        val runningPort = try {
+            libv2ray.Libv2ray.getVkTurnLocalPort()
+        } catch (e: Throwable) {
+            0
+        }
+        val targetPort = if (runningPort > 0) runningPort else (profileItem.serverPort?.toIntOrNull() ?: 10808)
+        val targetAddress = AppConfig.LOOPBACK
+
+        return when (targetProtocol) {
+            "trojan" -> {
+                val outbound = createInitOutbound(EConfigType.TROJAN)
+                outbound?.settings?.servers?.firstOrNull()?.let { server ->
+                    server.address = targetAddress
+                    server.port = targetPort
+                    server.password = profileItem.password
+                    server.flow = profileItem.flow
+                }
+                outbound
+            }
+            "vmess" -> {
+                val outbound = createInitOutbound(EConfigType.VMESS)
+                outbound?.settings?.vnext?.firstOrNull()?.let { vnext ->
+                    vnext.address = targetAddress
+                    vnext.port = targetPort
+                    vnext.users[0].id = profileItem.password.orEmpty()
+                    vnext.users[0].security = profileItem.method ?: "auto"
+                }
+                outbound
+            }
+            "shadowsocks" -> {
+                val outbound = createInitOutbound(EConfigType.SHADOWSOCKS)
+                outbound?.settings?.servers?.firstOrNull()?.let { server ->
+                    server.address = targetAddress
+                    server.port = targetPort
+                    server.password = profileItem.password
+                    server.method = profileItem.method ?: "aes-128-gcm"
+                }
+                outbound
+            }
+            "socks" -> {
+                val outbound = createInitOutbound(EConfigType.SOCKS)
+                outbound?.settings?.servers?.firstOrNull()?.let { server ->
+                    server.address = targetAddress
+                    server.port = targetPort
+                }
+                outbound
+            }
+            else -> {
+                val outbound = createInitOutbound(EConfigType.VLESS)
+                outbound?.settings?.vnext?.firstOrNull()?.let { vnext ->
+                    vnext.address = targetAddress
+                    vnext.port = targetPort
+                    vnext.users[0].id = profileItem.password.orEmpty()
+                    vnext.users[0].encryption = if (profileItem.method.isNullOrEmpty()) "none" else profileItem.method
+                    vnext.users[0].flow = profileItem.flow
+                }
+                val sni = outbound?.streamSettings?.let {
+                    populateTransportSettings(it, profileItem)
+                }
+                outbound?.streamSettings?.let {
+                    populateTlsSettings(it, profileItem, sni)
+                }
+                outbound
+            }
+        }
     }
 
     private fun toOutboundWireguard(profileItem: ProfileItem): OutboundBean? {

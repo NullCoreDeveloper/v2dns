@@ -112,7 +112,7 @@ object CoreServiceManager {
             return libv2ray.Libv2ray.isMdnsClientRunning()
         }
         if (currentConfig?.configType == EConfigType.VKTURN) {
-            return libv2ray.Libv2ray.isVkTurnClientRunning()
+            return libv2ray.Libv2ray.isVkTurnClientRunning() && coreController.isRunning
         }
         return coreController.isRunning
     }
@@ -260,28 +260,30 @@ object CoreServiceManager {
                 error("MasterDNSVPN client failed to start")
             }
             NotificationManager.showNotification(currentConfig)
-        } else if (config.configType == EConfigType.VKTURN) {
-            var vkTurnConfig = MmkvManager.decodeServerRaw(guid) ?: error("VK TURN config is empty")
-            val socksPort = SettingsManager.getSocksPort().toInt()
-            try {
-                val jsonObject = com.google.gson.JsonParser.parseString(vkTurnConfig).asJsonObject
-                jsonObject.addProperty("localPort", socksPort)
-                vkTurnConfig = jsonObject.toString()
-            } catch (e: Exception) {
-                LogUtil.e(AppConfig.TAG, "Failed to parse/update localPort in VK TURN config", e)
-            }
-            LogUtil.i(AppConfig.TAG, "StartCore-Manager: Starting VK TURN client on port $socksPort")
-            val vkTurnConfigBase64 = android.util.Base64.encodeToString(
-                vkTurnConfig.toByteArray(Charsets.UTF_8),
-                android.util.Base64.NO_WRAP
-            )
-            val filesDir = service.filesDir.absolutePath
-            libv2ray.Libv2ray.startVkTurnClient(vkTurnConfigBase64, "", filesDir)
-            if (!libv2ray.Libv2ray.isVkTurnClientRunning()) {
-                error("VK TURN client failed to start")
-            }
-            NotificationManager.showNotification(currentConfig)
         } else {
+            if (config.configType == EConfigType.VKTURN) {
+                val vkPort = Utils.findRandomFreePort()
+                var vkTurnConfig = MmkvManager.decodeServerRaw(guid) ?: error("VK TURN config is empty")
+                try {
+                    val jsonObject = com.google.gson.JsonParser.parseString(vkTurnConfig).asJsonObject
+                    jsonObject.addProperty("localPort", vkPort)
+                    vkTurnConfig = jsonObject.toString()
+                } catch (e: Exception) {
+                    LogUtil.e(AppConfig.TAG, "Failed to parse/update localPort in VK TURN config", e)
+                }
+                LogUtil.i(AppConfig.TAG, "StartCore-Manager: Starting VK TURN client on internal port $vkPort")
+                val vkTurnConfigBase64 = android.util.Base64.encodeToString(
+                    vkTurnConfig.toByteArray(Charsets.UTF_8),
+                    android.util.Base64.NO_WRAP
+                )
+                val filesDir = service.filesDir.absolutePath
+                libv2ray.Libv2ray.startVkTurnClient(vkTurnConfigBase64, "", filesDir)
+                if (!libv2ray.Libv2ray.isVkTurnClientRunning()) {
+                    error("VK TURN client failed to start")
+                }
+                currentConfig?.server = AppConfig.LOOPBACK
+                currentConfig?.serverPort = vkPort.toString()
+            }
             val result = CoreConfigManager.getV2rayConfig(service, guid)
             LogUtil.d(AppConfig.TAG, result.content)
             if (!result.status) {
@@ -341,16 +343,17 @@ object CoreServiceManager {
                     LogUtil.e(AppConfig.TAG, "StartCore-Manager: Failed to stop MasterDNSVPN client", e)
                 }
             }
-        } else if (currentConfig?.configType == EConfigType.VKTURN) {
-            LogUtil.i(AppConfig.TAG, "StartCore-Manager: Stopping VK TURN client")
-            CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    libv2ray.Libv2ray.stopVkTurnClient()
-                } catch (e: Exception) {
-                    LogUtil.e(AppConfig.TAG, "StartCore-Manager: Failed to stop VK TURN client", e)
+        } else {
+            if (currentConfig?.configType == EConfigType.VKTURN) {
+                LogUtil.i(AppConfig.TAG, "StartCore-Manager: Stopping VK TURN client")
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        libv2ray.Libv2ray.stopVkTurnClient()
+                    } catch (e: Exception) {
+                        LogUtil.e(AppConfig.TAG, "StartCore-Manager: Failed to stop VK TURN client", e)
+                    }
                 }
             }
-        } else {
             if (coreController.isRunning) {
                 CoroutineScope(Dispatchers.IO).launch {
                     try {

@@ -19,6 +19,7 @@ import com.v2ray.ang.fmt.ShadowsocksFmt
 import com.v2ray.ang.fmt.SocksFmt
 import com.v2ray.ang.fmt.TrojanFmt
 import com.v2ray.ang.fmt.MdnsFmt
+import com.v2ray.ang.fmt.VkTurnFmt
 import com.v2ray.ang.fmt.VlessFmt
 import com.v2ray.ang.fmt.VmessFmt
 import com.v2ray.ang.fmt.WireguardFmt
@@ -44,7 +45,8 @@ object AngConfigManager {
             EConfigType.WIREGUARD.protocolScheme to WireguardFmt::parse,
             EConfigType.HYSTERIA2.protocolScheme to Hysteria2Fmt::parse,
             AppConfig.HY2 to Hysteria2Fmt::parse,
-            EConfigType.MDNS.protocolScheme to MdnsFmt::parse
+            EConfigType.MDNS.protocolScheme to MdnsFmt::parse,
+            EConfigType.VKTURN.protocolScheme to VkTurnFmt::parse
         )
     }
 
@@ -161,6 +163,7 @@ object AngConfigManager {
                 EConfigType.WIREGUARD -> WireguardFmt.toUri(config)
                 EConfigType.HYSTERIA2 -> Hysteria2Fmt.toUri(config)
                 EConfigType.MDNS -> MdnsFmt.toUri(config)
+                EConfigType.VKTURN -> VkTurnFmt.toUri(config)
                 else -> ""
             }
         } catch (e: Exception) {
@@ -297,6 +300,9 @@ object AngConfigManager {
             val key = Utils.getUuid()
             if (config.configType == EConfigType.MDNS && !config.mdnsRawConfig.isNullOrEmpty()) {
                 MmkvManager.encodeServerRaw(key, config.mdnsRawConfig.orEmpty())
+            }
+            if (config.configType == EConfigType.VKTURN && !config.vkTurnRawConfig.isNullOrEmpty()) {
+                MmkvManager.encodeServerRaw(key, config.vkTurnRawConfig.orEmpty())
             }
             // Save profile directly without updating serverList
             MmkvManager.encodeProfileDirect(key, JsonUtil.toJson(config))
@@ -659,6 +665,18 @@ object AngConfigManager {
                 // Ignore, fallback
             }
             return "NullDnsTunneling"
+        }
+        if (profile.configType == EConfigType.VKTURN) {
+            try {
+                val jsonObject = com.google.gson.JsonParser.parseString(profile.vkTurnRawConfig.orEmpty()).asJsonObject
+                val proto = if (jsonObject.has("targetProtocol")) jsonObject.get("targetProtocol").asString else "vless"
+                val srv = if (jsonObject.has("server")) jsonObject.get("server").asString else profile.server.orEmpty()
+                val prt = if (jsonObject.has("port")) jsonObject.get("port").asString else profile.serverPort.orEmpty()
+                return "VK TURN -> $proto ($srv:$prt)"
+            } catch (e: Exception) {
+                // Ignore, fallback
+            }
+            return "VK TURN Proxy"
         }
 
         // Hide xxx:xxx:***/xxx.xxx.xxx.***

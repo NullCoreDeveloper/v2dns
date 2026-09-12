@@ -192,6 +192,7 @@ object AppConfig {
     const val HYSTERIA2 = "hysteria2://"
     const val HY2 = "hy2://"
     const val MDNS = "mdns://"
+    const val VKTURN = "vkturn://"
 
     /** Give a good name to this, IDK*/
     const val VPN = "VPN"

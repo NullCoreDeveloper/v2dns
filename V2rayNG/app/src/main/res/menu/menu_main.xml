@@ -68,6 +68,10 @@
                 android:id="@+id/import_manually_mdns"
                 android:title="@string/menu_item_import_config_manually_mdns"
                 app:showAsAction="never" />
+            <item
+                android:id="@+id/import_manually_vkturn"
+                android:title="@string/menu_item_import_config_manually_vkturn"
+                app:showAsAction="never" />
         </menu>
     </item>
     <item

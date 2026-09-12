@@ -69,6 +69,7 @@ data class ProfileItem(
 
     var browserDialerMode: String? = null,
     var mdnsRawConfig: String? = null,
+    var vkTurnRawConfig: String? = null,
 
     ) {
     companion object {

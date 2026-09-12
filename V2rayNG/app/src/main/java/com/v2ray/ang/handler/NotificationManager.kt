@@ -95,13 +95,15 @@ object NotificationManager {
 
         val contentText = if (currentConfig?.configType == com.v2ray.ang.enums.EConfigType.MDNS) {
             service.getString(R.string.notification_mdns_active)
+        } else if (currentConfig?.configType == com.v2ray.ang.enums.EConfigType.VKTURN) {
+            "VK TURN Proxy активен"
         } else {
             service.getString(R.string.notification_action_more)
         }
 
         mBuilder = NotificationCompat.Builder(service, channelId)
             .setSmallIcon(R.drawable.ic_stat_name)
-            .setContentTitle(currentConfig?.remarks ?: "MasterDNSVPN (remarks null)")
+            .setContentTitle(currentConfig?.remarks ?: "Connected")
             .setContentText(contentText)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setOngoing(true)

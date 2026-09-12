@@ -179,6 +179,7 @@ class GroupServerFragment : BaseFragment<FragmentGroupServerBinding>(),
         val activityClass = when (profile.configType) {
             EConfigType.CUSTOM -> ServerCustomConfigActivity::class.java
             EConfigType.MDNS -> ServerCustomConfigActivity::class.java
+            EConfigType.VKTURN -> ServerCustomConfigActivity::class.java
             EConfigType.POLICYGROUP -> ServerGroupActivity::class.java
             EConfigType.PROXYCHAIN -> ServerProxyChainActivity::class.java
             else -> ServerActivity::class.java

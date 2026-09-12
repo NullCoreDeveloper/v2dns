@@ -17,7 +17,8 @@ enum class EConfigType(val value: Int, val protocolScheme: String) {
     HTTP(10, AppConfig.HTTP),
     POLICYGROUP(101, AppConfig.CUSTOM),
     PROXYCHAIN(102, AppConfig.CUSTOM),
-    MDNS(200, AppConfig.MDNS);
+    MDNS(200, AppConfig.MDNS),
+    VKTURN(300, AppConfig.VKTURN);
 
     companion object {
         fun fromInt(value: Int) = entries.firstOrNull { it.value == value }

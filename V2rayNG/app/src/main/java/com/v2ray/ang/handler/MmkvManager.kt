@@ -149,6 +149,9 @@ object MmkvManager {
         if (config?.configType == EConfigType.MDNS) {
             config.mdnsRawConfig = decodeServerRaw(guid)
         }
+        if (config?.configType == EConfigType.VKTURN) {
+            config.vkTurnRawConfig = decodeServerRaw(guid)
+        }
         return config
     }
 

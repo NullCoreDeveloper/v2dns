@@ -363,8 +363,9 @@ class CoreVpnService : VpnService(), ServiceControl {
         val guid = MmkvManager.getSelectServer()
         val config = guid?.let { MmkvManager.decodeServerConfig(it) }
         val isMdns = config?.configType == EConfigType.MDNS
+        val isVkTurn = config?.configType == EConfigType.VKTURN
 
-        if (SettingsManager.isUsingHevTun() || isMdns) {
+        if (SettingsManager.isUsingHevTun() || isMdns || isVkTurn) {
             tun2SocksService = TProxyService(
                 context = applicationContext,
                 vpnInterface = mInterface,
@@ -375,7 +376,7 @@ class CoreVpnService : VpnService(), ServiceControl {
             tun2SocksService = null
         }
 
-        if (isMdns) {
+        if (isMdns || isVkTurn) {
             CoroutineScope(Dispatchers.IO).launch {
                 val socksPort = SettingsManager.getSocksPort().toInt()
                 LogUtil.i(AppConfig.TAG, "StartCore-VPN: Waiting for SOCKS5 port $socksPort to open...")

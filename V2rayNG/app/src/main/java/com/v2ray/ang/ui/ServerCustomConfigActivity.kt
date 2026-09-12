@@ -77,6 +77,7 @@ class ServerCustomConfigActivity : BaseActivity() {
 
         val config = MmkvManager.decodeServerConfig(editGuid) ?: ProfileItem.create(EConfigType.CUSTOM)
         val isMdns = config.configType == EConfigType.MDNS
+        val isVkTurn = config.configType == EConfigType.VKTURN
 
         if (isMdns) {
             try {
@@ -99,6 +100,26 @@ class ServerCustomConfigActivity : BaseActivity() {
             config.server = "127.0.0.1"
             config.serverPort = "10808"
             config.description = "NullDnsTunneling client configuration"
+        } else if (isVkTurn) {
+            try {
+                val json = com.google.gson.JsonParser.parseString(binding.editor.text.toString()).asJsonObject
+                if (!json.has("server") || json.get("server").asString.isNullOrEmpty()) {
+                    toast("Укажите server в JSON конфигурации")
+                    return false
+                }
+                val server = json.get("server").asString
+                val port = if (json.has("port")) json.get("port").asString else "443"
+                val proto = if (json.has("targetProtocol")) json.get("targetProtocol").asString else "vless"
+                config.server = server
+                config.serverPort = port
+                config.description = "VK TURN -> $proto ($server:$port)"
+            } catch (e: Exception) {
+                toast("Некорректный JSON конфиг: ${e.message}")
+                return false
+            }
+            binding.etRemarks.text.let {
+                config.remarks = if (it.isNullOrEmpty()) "VK TURN Proxy" else it.toString()
+            }
         } else {
             val profileItem = try {
                 CustomFmt.parse(binding.editor.text.toString())

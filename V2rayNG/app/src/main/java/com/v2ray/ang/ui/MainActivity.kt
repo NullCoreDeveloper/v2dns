@@ -305,6 +305,11 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             true
         }
 
+        R.id.import_manually_vkturn -> {
+            importManually(EConfigType.VKTURN.value)
+            true
+        }
+
         R.id.export_all -> {
             exportAll()
             true
@@ -391,6 +396,31 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
             profile.remarks = "NullDnsTunneling"
             profile.server = "127.0.0.1"
             profile.serverPort = "10808"
+            profile.subscriptionId = mainViewModel.subscriptionId
+            MmkvManager.encodeServerConfig(guid, profile)
+            MmkvManager.encodeServerRaw(guid, initialJson)
+
+            startActivity(
+                Intent()
+                    .putExtra("guid", guid)
+                    .putExtra("isRunning", mainViewModel.isRunning.value)
+                    .putExtra("subscriptionId", mainViewModel.subscriptionId)
+                    .setClass(this, ServerCustomConfigActivity::class.java)
+            )
+        } else if (createConfigType == EConfigType.VKTURN.value) {
+            val guid = Utils.getUuid()
+            val initialJson = """{
+  "server": "1.2.3.4",
+  "port": 443,
+  "targetProtocol": "vless",
+  "vkLink": "aD0YV1u9x_8m51L9H4fQ_6_16089",
+  "streams": 2
+}"""
+            val profile = ProfileItem.create(EConfigType.VKTURN)
+            profile.remarks = "VK TURN Proxy"
+            profile.server = "1.2.3.4"
+            profile.serverPort = "443"
+            profile.description = "VK TURN -> vless (1.2.3.4:443)"
             profile.subscriptionId = mainViewModel.subscriptionId
             MmkvManager.encodeServerConfig(guid, profile)
             MmkvManager.encodeServerRaw(guid, initialJson)

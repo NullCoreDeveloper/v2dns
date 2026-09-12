@@ -114,9 +114,30 @@ type turnCachedCreds struct {
 
 var (
 	credsCacheMu sync.RWMutex
-	cachedCreds  turnCachedCreds
+	cachedCreds  = make(map[int]turnCachedCreds) // participantIndex -> credentials
 	vkFetchMu    sync.Mutex
 )
+
+func getParticipantIndex(streamID int) int {
+	if streamID <= 1 {
+		return 0
+	}
+	return (streamID - 1) / 2
+}
+
+func invalidateCachedCreds(link string, streamID int) {
+	pIdx := getParticipantIndex(streamID)
+	credsCacheMu.Lock()
+	delete(cachedCreds, pIdx)
+	credsCacheMu.Unlock()
+	log.Printf("[STREAM %d] [VK Auth] Invalidated cached TURN credentials for participant %d (quota reached or allocation error)", streamID, pIdx)
+}
+
+func clearAllCachedCreds() {
+	credsCacheMu.Lock()
+	cachedCreds = make(map[int]turnCachedCreds)
+	credsCacheMu.Unlock()
+}
 
 func cleanVkLink(link string) string {
 	link = strings.TrimSpace(link)
@@ -226,11 +247,13 @@ func fetchVkCreds(ctx context.Context, link string, customCred *VKCredentials, s
 		return "", "", "", fmt.Errorf("CAPTCHA_WAIT_REQUIRED: global lockout active")
 	}
 
+	pIdx := getParticipantIndex(streamID)
+
 	credsCacheMu.RLock()
-	if cachedCreds.link == link && time.Now().Before(cachedCreds.expiresAt) {
-		u, p, a := cachedCreds.username, cachedCreds.password, cachedCreds.serverAddr
+	if c, ok := cachedCreds[pIdx]; ok && c.link == link && time.Now().Before(c.expiresAt) {
+		u, p, a := c.username, c.password, c.serverAddr
 		credsCacheMu.RUnlock()
-		log.Printf("[STREAM %d] [VK Auth] Using cached TURN credentials (expires in %v)", streamID, time.Until(cachedCreds.expiresAt).Round(time.Second))
+		log.Printf("[STREAM %d] [VK Auth] Using cached TURN credentials for participant %d (expires in %v)", streamID, pIdx, time.Until(c.expiresAt).Round(time.Second))
 		return u, p, a, nil
 	}
 	credsCacheMu.RUnlock()
@@ -240,8 +263,8 @@ func fetchVkCreds(ctx context.Context, link string, customCred *VKCredentials, s
 
 	// Double-check inside lock
 	credsCacheMu.RLock()
-	if cachedCreds.link == link && time.Now().Before(cachedCreds.expiresAt) {
-		u, p, a := cachedCreds.username, cachedCreds.password, cachedCreds.serverAddr
+	if c, ok := cachedCreds[pIdx]; ok && c.link == link && time.Now().Before(c.expiresAt) {
+		u, p, a := c.username, c.password, c.serverAddr
 		credsCacheMu.RUnlock()
 		return u, p, a, nil
 	}
@@ -259,7 +282,7 @@ func fetchVkCreds(ctx context.Context, link string, customCred *VKCredentials, s
 		user, pass, addr, err := getTokenChain(ctx, link, creds, streamID, jar)
 		if err == nil {
 			credsCacheMu.Lock()
-			cachedCreds = turnCachedCreds{
+			cachedCreds[pIdx] = turnCachedCreds{
 				username:   user,
 				password:   pass,
 				serverAddr: addr,
@@ -267,13 +290,14 @@ func fetchVkCreds(ctx context.Context, link string, customCred *VKCredentials, s
 				expiresAt:  time.Now().Add(9 * time.Minute),
 			}
 			credsCacheMu.Unlock()
+			log.Printf("[STREAM %d] [VK Auth] Registered new participant %d (%s) on TURN server", streamID, pIdx, user)
 			return user, pass, addr, nil
 		}
 		lastErr = err
 		log.Printf("[STREAM %d] [VK Auth] Creds failed (%s): %v", streamID, creds.ClientID, err)
 	}
 
-	return "", "", "", fmt.Errorf("all VK credentials failed: %w", lastErr)
+	return "", "", "", fmt.Errorf("all VK credentials failed for participant %d: %w", pIdx, lastErr)
 }
 
 func getTokenChain(ctx context.Context, link string, creds VKCredentials, streamID int, jar tlsclient.CookieJar) (string, string, string, error) {
@@ -506,6 +530,9 @@ func createSmuxSession(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr
 
 	relayConn, err := turnClient.Allocate()
 	if err != nil {
+		if strings.Contains(err.Error(), "486") {
+			invalidateCachedCreds(cfg.VkLink, streamID)
+		}
 		cleanup()
 		return nil, nil, fmt.Errorf("TURN allocate: %w", err)
 	}
@@ -604,25 +631,33 @@ func pipe(ctx context.Context, c1, c2 net.Conn) {
 	ctx2, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	go func() {
-		<-ctx2.Done()
-		_ = c1.SetDeadline(time.Now())
-		_ = c2.SetDeadline(time.Now())
-	}()
+	var once sync.Once
+	closeBoth := func() {
+		_ = c1.Close()
+		_ = c2.Close()
+	}
+
+	context.AfterFunc(ctx2, closeBoth)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() {
+
+	cp := func(dst, src net.Conn) {
 		defer wg.Done()
-		defer cancel()
-		_, _ = io.Copy(c1, c2)
-	}()
-	go func() {
-		defer wg.Done()
-		defer cancel()
-		_, _ = io.Copy(c2, c1)
-	}()
+		_, _ = io.Copy(dst, src)
+		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+		}
+		time.AfterFunc(5*time.Second, func() {
+			once.Do(closeBoth)
+		})
+	}
+
+	go cp(c1, c2)
+	go cp(c2, c1)
+
 	wg.Wait()
+	once.Do(closeBoth)
 }
 
 func stopVkTurnClientLocked() {
@@ -638,6 +673,7 @@ func stopVkTurnClientLocked() {
 	activePool = nil
 	activeLocalPort = 0
 	globalLockout.Store(0)
+	clearAllCachedCreds()
 }
 
 // StartVkTurnClient starts the VK TURN client tunnel.

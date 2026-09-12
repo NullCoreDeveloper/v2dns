@@ -64,12 +64,15 @@ func NewKCPOverDTLS(dtlsConn net.Conn, isServer bool) (*kcp.UDPSession, error) {
 			return nil, err
 		}
 		if err = listener.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+			_ = listener.Close()
 			return nil, err
 		}
 		sess, err = listener.AcceptKCP()
 		if err != nil {
+			_ = listener.Close()
 			return nil, err
 		}
+		_ = listener.SetDeadline(time.Time{})
 	} else {
 		sess, err = kcp.NewConn2(dtlsConn.RemoteAddr(), block, 0, 0, pc)
 		if err != nil {
@@ -78,9 +81,10 @@ func NewKCPOverDTLS(dtlsConn net.Conn, isServer bool) (*kcp.UDPSession, error) {
 	}
 
 	// Tune KCP for TURN tunnel
+	sess.SetStreamMode(true)
 	sess.SetNoDelay(1, 20, 2, 1)
 	sess.SetWindowSize(256, 256)
-	sess.SetMtu(1200)
+	sess.SetMtu(1100)
 	sess.SetACKNoDelay(true)
 
 	return sess, nil

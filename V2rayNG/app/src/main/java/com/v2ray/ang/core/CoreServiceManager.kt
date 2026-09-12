@@ -302,9 +302,23 @@ object CoreServiceManager {
 
             NotificationManager.showNotification(currentConfig)
             CoreNativeManager.reconcileBrowserDialer(dialerAddr)
-            coreController.startLoop(result.content, tunFd)
+            try {
+                coreController.startLoop(result.content, tunFd)
+            } catch (e: Exception) {
+                if (currentConfig?.configType == EConfigType.VKTURN) {
+                    try {
+                        libv2ray.Libv2ray.stopVkTurnClient()
+                    } catch (_: Exception) {}
+                }
+                throw e
+            }
 
             if (!coreController.isRunning) {
+                if (currentConfig?.configType == EConfigType.VKTURN) {
+                    try {
+                        libv2ray.Libv2ray.stopVkTurnClient()
+                    } catch (_: Exception) {}
+                }
                 error("Core failed to start")
             }
 
@@ -346,12 +360,10 @@ object CoreServiceManager {
         } else {
             if (currentConfig?.configType == EConfigType.VKTURN) {
                 LogUtil.i(AppConfig.TAG, "StartCore-Manager: Stopping VK TURN client")
-                CoroutineScope(Dispatchers.IO).launch {
-                    try {
-                        libv2ray.Libv2ray.stopVkTurnClient()
-                    } catch (e: Exception) {
-                        LogUtil.e(AppConfig.TAG, "StartCore-Manager: Failed to stop VK TURN client", e)
-                    }
+                try {
+                    libv2ray.Libv2ray.stopVkTurnClient()
+                } catch (e: Exception) {
+                    LogUtil.e(AppConfig.TAG, "StartCore-Manager: Failed to stop VK TURN client", e)
                 }
             }
             if (coreController.isRunning) {

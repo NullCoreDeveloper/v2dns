@@ -65,6 +65,15 @@ jobs:
         path: ${{ github.workspace }}/libs
         key: libhevtun-${{ runner.os }}-${{ env.NDK_HOME }}-${{ hashFiles('.git/modules/hev-socks5-tunnel/HEAD') }}-${{ hashFiles('compile-hevtun.sh') }}
 
+    - name: Download Geo assets
+      run: |
+        cd ${{ github.workspace }}/AndroidLibXrayLite
+        mkdir -p assets data
+        bash gen_assets.sh download
+        cp -v data/*.dat assets/
+        mkdir -p ${{ github.workspace }}/V2rayNG/app/src/main/assets
+        cp -v data/*.dat ${{ github.workspace }}/V2rayNG/app/src/main/assets/
+
     - name: Restore cached libv2ray
       id: cache-libv2ray-restore
       uses: actions/cache/restore@v4

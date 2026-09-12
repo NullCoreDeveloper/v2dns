@@ -46,6 +46,8 @@ type ClientConfig struct {
 	TargetProtocol string `json:"targetProtocol"`
 	VkLink         string `json:"vkLink"`
 	Streams        int    `json:"streams"`
+	VkAppId        string `json:"vkAppId"`
+	VkAppSecret    string `json:"vkAppSecret"`
 	ClientId       string `json:"clientId"`
 	ClientPassword string `json:"clientPassword"`
 	LocalPort      int    `json:"localPort"`
@@ -96,6 +98,7 @@ var (
 	clientMu        sync.Mutex
 	clientRunning   bool
 	clientCancel    context.CancelFunc
+	activeListener  net.Listener
 	activeLocalPort int
 	globalLockout   atomic.Int64
 )
@@ -379,7 +382,9 @@ func createSmuxSession(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr
 	}
 
 	var customCred *VKCredentials
-	if cfg.ClientId != "" && cfg.ClientPassword != "" {
+	if cfg.VkAppId != "" && cfg.VkAppSecret != "" {
+		customCred = &VKCredentials{ClientID: cfg.VkAppId, ClientSecret: cfg.VkAppSecret}
+	} else if cfg.ClientId != "" && cfg.ClientPassword != "" && !strings.Contains(cfg.ClientId, "-") {
 		customCred = &VKCredentials{ClientID: cfg.ClientId, ClientSecret: cfg.ClientPassword}
 	}
 
@@ -547,13 +552,27 @@ func pipe(ctx context.Context, c1, c2 net.Conn) {
 	wg.Wait()
 }
 
+func stopVkTurnClientLocked() {
+	if clientCancel != nil {
+		clientCancel()
+		clientCancel = nil
+	}
+	if activeListener != nil {
+		_ = activeListener.Close()
+		activeListener = nil
+	}
+	clientRunning = false
+	activeLocalPort = 0
+}
+
 // StartVkTurnClient starts the VK TURN client tunnel.
 func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string) error {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 
 	if clientRunning {
-		return fmt.Errorf("VK TURN client is already running")
+		log.Printf("[VK TURN Client] Existing client is running, stopping it before starting new one...")
+		stopVkTurnClientLocked()
 	}
 
 	data, err := base64.StdEncoding.DecodeString(configJsonBase64)
@@ -593,6 +612,7 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 
 	tcpAddr, _ := listener.Addr().(*net.TCPAddr)
 	activeLocalPort = tcpAddr.Port
+	activeListener = listener
 	log.Printf("[VK TURN Client] Listening on 127.0.0.1:%d for traffic to %s (streams: %d)", activeLocalPort, peerAddr, cfg.Streams)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -614,26 +634,23 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 	}
 
 	// Local listener loop
-	go func() {
+	go func(l net.Listener, c context.Context) {
 		defer func() {
-			_ = listener.Close()
+			_ = l.Close()
 			clientMu.Lock()
-			clientRunning = false
-			clientCancel = nil
-			activeLocalPort = 0
+			if activeListener == l {
+				clientRunning = false
+				clientCancel = nil
+				activeListener = nil
+				activeLocalPort = 0
+			}
 			clientMu.Unlock()
 		}()
 
 		for {
-			conn, err := listener.Accept()
+			conn, err := l.Accept()
 			if err != nil {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					log.Printf("[VK TURN Client] Accept error: %v", err)
-					return
-				}
+				return
 			}
 
 			sess := pool.pick()
@@ -654,7 +671,7 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 				pipe(ctx, c, stream)
 			}(conn, sess)
 		}
-	}()
+	}(listener, ctx)
 
 	return nil
 }
@@ -663,22 +680,7 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 func StopVkTurnClient() error {
 	clientMu.Lock()
 	defer clientMu.Unlock()
-
-	if !clientRunning {
-		return nil
-	}
-
-	if clientCancel != nil {
-		clientCancel()
-	}
-
-	for i := 0; i < 40; i++ {
-		if !clientRunning {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-
+	stopVkTurnClientLocked()
 	return nil
 }
 

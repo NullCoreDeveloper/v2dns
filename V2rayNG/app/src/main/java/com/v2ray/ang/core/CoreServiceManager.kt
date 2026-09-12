@@ -599,8 +599,22 @@ object CoreServiceManager {
          * @param intent The intent being received.
          */
         override fun onReceive(ctx: Context?, intent: Intent?) {
+            val key = intent?.getIntExtra("key", 0) ?: 0
+            if (key == AppConfig.MSG_VK_CAPTCHA_SOLVED) {
+                val token = intent?.getSerializableExtra("content") as? String
+                    ?: intent?.getStringExtra("content")
+                LogUtil.i(AppConfig.TAG, "CoreServiceManager: Received VK captcha token in daemon process: ${token?.take(15)}...")
+                if (!token.isNullOrEmpty()) {
+                    try {
+                        libv2ray.Libv2ray.submitCaptchaToken(token)
+                    } catch (e: Exception) {
+                        LogUtil.e(AppConfig.TAG, "Failed to submit captcha token to native core", e)
+                    }
+                }
+                return
+            }
             val serviceControl = serviceControl?.get() ?: return
-            when (intent?.getIntExtra("key", 0)) {
+            when (key) {
                 AppConfig.MSG_REGISTER_CLIENT -> {
                     if (coreController.isRunning) {
                         MessageUtil.sendMsg2UI(serviceControl.getService(), AppConfig.MSG_STATE_RUNNING, "")

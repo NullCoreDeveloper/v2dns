@@ -645,6 +645,8 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 	clientMu.Lock()
 	defer clientMu.Unlock()
 
+	globalConfigDir = configDir
+
 	if clientRunning {
 		log.Printf("[VK TURN Client] Existing client is running, stopping it before starting new one...")
 		stopVkTurnClientLocked()

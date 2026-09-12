@@ -202,12 +202,31 @@ class CaptchaActivity : AppCompatActivity() {
     private fun deliverToken(token: String) {
         if (isSolved) return
         isSolved = true
-        LogUtil.i(AppConfig.TAG, "VK Captcha solved successfully! Delivering token to Go core")
+        LogUtil.i(AppConfig.TAG, "VK Captcha solved successfully! Delivering token to Go core: ${token.take(15)}...")
+
+        // 1. Direct submit in current process
         try {
             libv2ray.Libv2ray.submitCaptchaToken(token)
         } catch (e: Exception) {
-            LogUtil.e(AppConfig.TAG, "Failed to submit captcha token to core", e)
+            LogUtil.e(AppConfig.TAG, "Failed to submit captcha token to core directly", e)
         }
+
+        // 2. Cross-process Broadcast to :RunSoLibV2RayDaemon service process
+        try {
+            com.v2ray.ang.util.MessageUtil.sendMsg2Service(this, AppConfig.MSG_VK_CAPTCHA_SOLVED, token)
+        } catch (e: Exception) {
+            LogUtil.e(AppConfig.TAG, "Failed to broadcast captcha token to service", e)
+        }
+
+        // 3. Shared internal storage file (universal cross-process fallback)
+        try {
+            val file = java.io.File(filesDir, "vk_captcha_token.tmp")
+            file.writeText(token)
+            LogUtil.i(AppConfig.TAG, "Saved captcha token to shared file: ${file.absolutePath}")
+        } catch (e: Exception) {
+            LogUtil.e(AppConfig.TAG, "Failed to write captcha token to shared file", e)
+        }
+
         Toast.makeText(applicationContext, "VK Verification passed! Connecting...", Toast.LENGTH_SHORT).show()
         Handler(Looper.getMainLooper()).postDelayed({ finish() }, 600)
     }

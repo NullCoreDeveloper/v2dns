@@ -13,7 +13,9 @@ import (
 	"net/http"
 	"net/http/httputil"
 	neturl "net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -35,6 +37,7 @@ var (
 	captchaHandlerMu     sync.Mutex
 	activeCaptchaHandler CaptchaHandler
 	captchaTokenCh       = make(chan string, 1)
+	globalConfigDir      string
 )
 
 func SetCaptchaHandler(h CaptchaHandler) {
@@ -443,15 +446,44 @@ func solveCaptchaViaProxy(redirectURI string) (string, error) {
 		default:
 		}
 
+		tokenFilePath := ""
+		if globalConfigDir != "" {
+			tokenFilePath = filepath.Join(globalConfigDir, "vk_captcha_token.tmp")
+			_ = os.Remove(tokenFilePath)
+		}
+
 		log.Printf("[VK Captcha] Opening direct in-app verification: %s", redirectURI)
 		h.OpenCaptcha(redirectURI)
 
-		select {
-		case token := <-captchaTokenCh:
-			log.Printf("[VK Captcha] Solved in-app, token received successfully")
-			return token, nil
-		case <-time.After(90 * time.Second):
-			return "", fmt.Errorf("in-app captcha timed out after 90 seconds")
+		ticker := time.NewTicker(200 * time.Millisecond)
+		defer ticker.Stop()
+		timeout := time.After(90 * time.Second)
+
+		for {
+			select {
+			case token := <-captchaTokenCh:
+				log.Printf("[VK Captcha] Solved in-app, token received via channel: %.15s...", token)
+				if tokenFilePath != "" {
+					_ = os.Remove(tokenFilePath)
+				}
+				return token, nil
+			case <-ticker.C:
+				if tokenFilePath != "" {
+					if data, err := os.ReadFile(tokenFilePath); err == nil && len(data) > 0 {
+						tok := strings.TrimSpace(string(data))
+						if len(tok) > 0 {
+							log.Printf("[VK Captcha] Solved in-app, token received via shared file: %.15s...", tok)
+							_ = os.Remove(tokenFilePath)
+							return tok, nil
+						}
+					}
+				}
+			case <-timeout:
+				if tokenFilePath != "" {
+					_ = os.Remove(tokenFilePath)
+				}
+				return "", fmt.Errorf("in-app captcha timed out after 90 seconds")
+			}
 		}
 	}
 

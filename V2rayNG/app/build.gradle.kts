@@ -80,7 +80,6 @@ android {
     sourceSets {
         getByName("main") {
             jniLibs.srcDirs("libs", "../../libs")
-            assets.srcDirs("src/main/assets", "../../AndroidLibXrayLite/assets")
         }
     }
 

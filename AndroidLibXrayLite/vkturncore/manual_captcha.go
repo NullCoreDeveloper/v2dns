@@ -34,12 +34,23 @@ type CaptchaHandler interface {
 var (
 	captchaHandlerMu     sync.Mutex
 	activeCaptchaHandler CaptchaHandler
+	captchaTokenCh       = make(chan string, 1)
 )
 
 func SetCaptchaHandler(h CaptchaHandler) {
 	captchaHandlerMu.Lock()
 	defer captchaHandlerMu.Unlock()
 	activeCaptchaHandler = h
+}
+
+func SubmitCaptchaToken(token string) {
+	if token == "" {
+		return
+	}
+	select {
+	case captchaTokenCh <- token:
+	default:
+	}
 }
 
 func localCaptchaOrigin() string {
@@ -421,6 +432,29 @@ func notifyKey(keyCh chan<- string, key string) {
 }
 
 func solveCaptchaViaProxy(redirectURI string) (string, error) {
+	captchaHandlerMu.Lock()
+	h := activeCaptchaHandler
+	captchaHandlerMu.Unlock()
+
+	// Direct in-app Android verification
+	if h != nil {
+		select {
+		case <-captchaTokenCh:
+		default:
+		}
+
+		log.Printf("[VK Captcha] Opening direct in-app verification: %s", redirectURI)
+		h.OpenCaptcha(redirectURI)
+
+		select {
+		case token := <-captchaTokenCh:
+			log.Printf("[VK Captcha] Solved in-app, token received successfully")
+			return token, nil
+		case <-time.After(90 * time.Second):
+			return "", fmt.Errorf("in-app captcha timed out after 90 seconds")
+		}
+	}
+
 	keyCh := make(chan string, 1)
 
 	targetURL, err := neturl.Parse(redirectURI)

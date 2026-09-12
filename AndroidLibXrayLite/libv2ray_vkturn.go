@@ -43,4 +43,9 @@ func SetCaptchaHandler(h CaptchaHandler) {
 	vkturncore.SetCaptchaHandler(h)
 }
 
+// SubmitCaptchaToken submits the solved captcha token from Android UI.
+func SubmitCaptchaToken(token string) {
+	vkturncore.SubmitCaptchaToken(token)
+}
+
 

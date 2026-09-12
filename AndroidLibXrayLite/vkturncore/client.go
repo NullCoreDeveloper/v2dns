@@ -99,9 +99,37 @@ var (
 	clientRunning   bool
 	clientCancel    context.CancelFunc
 	activeListener  net.Listener
+	activePool      *sessionPool
 	activeLocalPort int
 	globalLockout   atomic.Int64
 )
+
+type turnCachedCreds struct {
+	username   string
+	password   string
+	serverAddr string
+	link       string
+	expiresAt  time.Time
+}
+
+var (
+	credsCacheMu sync.RWMutex
+	cachedCreds  turnCachedCreds
+	vkFetchMu    sync.Mutex
+)
+
+func cleanVkLink(link string) string {
+	link = strings.TrimSpace(link)
+	if parts := strings.Split(link, "join/"); len(parts) > 1 {
+		link = parts[len(parts)-1]
+	} else if parts := strings.Split(link, "call/"); len(parts) > 1 {
+		link = parts[len(parts)-1]
+	}
+	if idx := strings.IndexAny(link, "/?#&"); idx != -1 {
+		link = link[:idx]
+	}
+	return strings.TrimSpace(link)
+}
 
 // directNet implements Pion transport.Net interface
 type directNet struct{}
@@ -198,6 +226,27 @@ func fetchVkCreds(ctx context.Context, link string, customCred *VKCredentials, s
 		return "", "", "", fmt.Errorf("CAPTCHA_WAIT_REQUIRED: global lockout active")
 	}
 
+	credsCacheMu.RLock()
+	if cachedCreds.link == link && time.Now().Before(cachedCreds.expiresAt) {
+		u, p, a := cachedCreds.username, cachedCreds.password, cachedCreds.serverAddr
+		credsCacheMu.RUnlock()
+		log.Printf("[STREAM %d] [VK Auth] Using cached TURN credentials (expires in %v)", streamID, time.Until(cachedCreds.expiresAt).Round(time.Second))
+		return u, p, a, nil
+	}
+	credsCacheMu.RUnlock()
+
+	vkFetchMu.Lock()
+	defer vkFetchMu.Unlock()
+
+	// Double-check inside lock
+	credsCacheMu.RLock()
+	if cachedCreds.link == link && time.Now().Before(cachedCreds.expiresAt) {
+		u, p, a := cachedCreds.username, cachedCreds.password, cachedCreds.serverAddr
+		credsCacheMu.RUnlock()
+		return u, p, a, nil
+	}
+	credsCacheMu.RUnlock()
+
 	credsList := defaultVkCredentials
 	if customCred != nil && customCred.ClientID != "" && customCred.ClientSecret != "" {
 		credsList = append([]VKCredentials{*customCred}, credsList...)
@@ -209,6 +258,15 @@ func fetchVkCreds(ctx context.Context, link string, customCred *VKCredentials, s
 	for _, creds := range credsList {
 		user, pass, addr, err := getTokenChain(ctx, link, creds, streamID, jar)
 		if err == nil {
+			credsCacheMu.Lock()
+			cachedCreds = turnCachedCreds{
+				username:   user,
+				password:   pass,
+				serverAddr: addr,
+				link:       link,
+				expiresAt:  time.Now().Add(9 * time.Minute),
+			}
+			credsCacheMu.Unlock()
 			return user, pass, addr, nil
 		}
 		lastErr = err
@@ -312,7 +370,7 @@ func getTokenChain(ctx context.Context, link string, creds VKCredentials, stream
 			if captchaErr != nil && captchaErr.IsCaptchaError() {
 				successToken, solveErr := solveVkCaptcha(ctx, captchaErr, streamID, client, profile)
 				if solveErr != nil {
-					globalLockout.Store(time.Now().Add(60 * time.Second).Unix())
+					globalLockout.Store(time.Now().Add(10 * time.Second).Unix())
 					return "", "", "", solveErr
 				}
 				data = fmt.Sprintf("vk_join_link=https://vk.com/call/join/%s&name=%s&captcha_key=&captcha_sid=%s&is_sound_captcha=0&success_token=%s&captcha_ts=%s&captcha_attempt=%s&access_token=%s",
@@ -562,7 +620,9 @@ func stopVkTurnClientLocked() {
 		activeListener = nil
 	}
 	clientRunning = false
+	activePool = nil
 	activeLocalPort = 0
+	globalLockout.Store(0)
 }
 
 // StartVkTurnClient starts the VK TURN client tunnel.
@@ -588,6 +648,7 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 	if cfg.Server == "" || cfg.Port == 0 {
 		return fmt.Errorf("invalid server address (%s:%d)", cfg.Server, cfg.Port)
 	}
+	cfg.VkLink = cleanVkLink(cfg.VkLink)
 	if cfg.VkLink == "" {
 		cfg.VkLink = "aD0YV1u9x_8m51L9H4fQ_6_16089" // fallback default conference link
 	}
@@ -620,6 +681,7 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 	clientRunning = true
 
 	pool := &sessionPool{}
+	activePool = pool
 
 	// Staggered session maintenance goroutines
 	for i := 0; i < cfg.Streams; i++ {
@@ -696,4 +758,14 @@ func GetVkTurnLocalPort() int {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	return activeLocalPort
+}
+
+// GetVkTurnActiveStreams returns the number of currently active VK TURN sessions.
+func GetVkTurnActiveStreams() int {
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	if activePool != nil {
+		return activePool.count()
+	}
+	return 0
 }

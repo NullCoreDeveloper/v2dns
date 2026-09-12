@@ -27,3 +27,9 @@ func IsVkTurnClientRunning() bool {
 func GetVkTurnLocalPort() int {
 	return vkturncore.GetVkTurnLocalPort()
 }
+
+// GetVkTurnActiveStreams returns the number of currently active/connected VK TURN streams.
+func GetVkTurnActiveStreams() int {
+	return vkturncore.GetVkTurnActiveStreams()
+}
+

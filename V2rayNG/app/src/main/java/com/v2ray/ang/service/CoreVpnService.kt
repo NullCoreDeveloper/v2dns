@@ -394,7 +394,28 @@ class CoreVpnService : VpnService(), ServiceControl {
                     delay(500)
                 }
                 if (portOpen) {
-                    LogUtil.i(AppConfig.TAG, "StartCore-VPN: SOCKS5 port $socksPort is open! Starting Tun2Socks...")
+                    if (isVkTurn) {
+                        LogUtil.i(AppConfig.TAG, "StartCore-VPN: SOCKS5 port $socksPort open, waiting for VK TURN tunnel streams...")
+                        var vkConnected = false
+                        for (j in 0..25) { // wait up to 12.5 seconds
+                            val activeStreams = try {
+                                libv2ray.Libv2ray.getVkTurnActiveStreams()
+                            } catch (_: Exception) { 0 }
+                            if (activeStreams > 0) {
+                                vkConnected = true
+                                break
+                            }
+                            delay(500)
+                        }
+                        if (!vkConnected) {
+                            LogUtil.e(AppConfig.TAG, "StartCore-VPN: VK TURN tunnel failed to connect (0 streams after 12.5s)!")
+                            withContext(Dispatchers.Main) {
+                                stopAllService()
+                            }
+                            return@launch
+                        }
+                    }
+                    LogUtil.i(AppConfig.TAG, "StartCore-VPN: Tunnel ready! Starting Tun2Socks...")
                     withContext(Dispatchers.Main) {
                         tun2SocksService?.startTun2Socks()
                     }

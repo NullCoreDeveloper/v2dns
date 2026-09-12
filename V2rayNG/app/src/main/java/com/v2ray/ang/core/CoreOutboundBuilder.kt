@@ -268,11 +268,11 @@ object CoreOutboundBuilder {
         }
 
         val runningPort = try {
-            libv2ray.Libv2ray.getVkTurnLocalPort()
+            libv2ray.Libv2ray.getVkTurnLocalPort().toInt()
         } catch (e: Throwable) {
             0
         }
-        val targetPort = if (runningPort > 0) runningPort else (profileItem.serverPort?.toIntOrNull() ?: 10808)
+        val targetPort: Int = if (runningPort > 0) runningPort else (profileItem.serverPort?.toIntOrNull() ?: 10808)
         val targetAddress = AppConfig.LOOPBACK
 
         return when (targetProtocol) {

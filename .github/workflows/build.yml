@@ -91,7 +91,7 @@ jobs:
         cd ${{ github.workspace }}/AndroidLibXrayLite
         gomobile init
         go mod tidy -v
-        gomobile bind -trimpath -v -androidapi 24 -target=android -ldflags='-s -w -buildid=' -o libv2ray.aar ./
+        gomobile bind -trimpath -v -androidapi 24 -target=android -ldflags='-checklinkname=0 -s -w -buildid=' -o libv2ray.aar ./
         mkdir -p ${{ github.workspace }}/V2rayNG/app/libs
         cp -v libv2ray.aar ${{ github.workspace }}/V2rayNG/app/libs/
       env:

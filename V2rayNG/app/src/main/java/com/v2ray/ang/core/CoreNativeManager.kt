@@ -32,6 +32,35 @@ object CoreNativeManager {
                 val assetPath = Utils.userAssetPath(context)
                 val deviceId = Utils.getDeviceIdForXUDPBaseKey()
                 Libv2ray.initCoreEnv(assetPath, deviceId)
+                context?.let { ctx ->
+                    try {
+                        Libv2ray.setCaptchaHandler(object : libv2ray.CaptchaHandler {
+                            override fun openCaptcha(url: String?) {
+                                if (url.isNullOrEmpty()) return
+                                LogUtil.i(AppConfig.TAG, "VK Captcha required: opening $url")
+                                try {
+                                    val intent = android.content.Intent(ctx, com.v2ray.ang.ui.CaptchaActivity::class.java).apply {
+                                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        putExtra("url", url)
+                                    }
+                                    ctx.startActivity(intent)
+                                } catch (e: Exception) {
+                                    LogUtil.e(AppConfig.TAG, "Failed to open CaptchaActivity, falling back to browser", e)
+                                    try {
+                                        val browserIntent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply {
+                                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                        ctx.startActivity(browserIntent)
+                                    } catch (ex: Exception) {
+                                        LogUtil.e(AppConfig.TAG, "Failed to open browser for captcha", ex)
+                                    }
+                                }
+                            }
+                        })
+                    } catch (e: Exception) {
+                        LogUtil.e(AppConfig.TAG, "Failed to set VK CaptchaHandler", e)
+                    }
+                }
                 LogUtil.i(AppConfig.TAG, "V2Ray core environment initialized successfully")
             } catch (e: Exception) {
                 LogUtil.e(AppConfig.TAG, "Failed to initialize V2Ray core environment", e)

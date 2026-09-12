@@ -370,8 +370,23 @@ func getTokenChain(ctx context.Context, link string, creds VKCredentials, stream
 			if captchaErr != nil && captchaErr.IsCaptchaError() {
 				successToken, solveErr := solveVkCaptcha(ctx, captchaErr, streamID, client, profile)
 				if solveErr != nil {
-					globalLockout.Store(time.Now().Add(10 * time.Second).Unix())
-					return "", "", "", solveErr
+					log.Printf("[STREAM %d] [VK Captcha] Auto PoW solve failed: %v. Triggering manual captcha fallback...", streamID, solveErr)
+					var manualErr error
+					if captchaErr.RedirectURI != "" {
+						successToken, manualErr = solveCaptchaViaProxy(captchaErr.RedirectURI)
+					} else if captchaErr.CaptchaImg != "" {
+						var captchaKey string
+						captchaKey, manualErr = solveCaptchaViaHTTP(captchaErr.CaptchaImg)
+						if manualErr == nil && captchaKey != "" {
+							data = fmt.Sprintf("vk_join_link=https://vk.com/call/join/%s&name=%s&captcha_key=%s&captcha_sid=%s&access_token=%s",
+								link, escapedName, neturl.QueryEscape(captchaKey), captchaErr.CaptchaSid, token1)
+							continue
+						}
+					}
+					if manualErr != nil {
+						globalLockout.Store(time.Now().Add(10 * time.Second).Unix())
+						return "", "", "", fmt.Errorf("manual captcha failed: %w", manualErr)
+					}
 				}
 				data = fmt.Sprintf("vk_join_link=https://vk.com/call/join/%s&name=%s&captcha_key=&captcha_sid=%s&is_sound_captcha=0&success_token=%s&captcha_ts=%s&captcha_attempt=%s&access_token=%s",
 					link, escapedName, captchaErr.CaptchaSid, neturl.QueryEscape(successToken), captchaErr.CaptchaTs, captchaErr.CaptchaAttempt, token1)

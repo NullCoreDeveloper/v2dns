@@ -33,3 +33,14 @@ func GetVkTurnActiveStreams() int {
 	return vkturncore.GetVkTurnActiveStreams()
 }
 
+// CaptchaHandler defines callback interface for manual captcha solving.
+type CaptchaHandler interface {
+	OpenCaptcha(url string)
+}
+
+// SetCaptchaHandler sets the callback for manual captcha UI.
+func SetCaptchaHandler(h CaptchaHandler) {
+	vkturncore.SetCaptchaHandler(h)
+}
+
+

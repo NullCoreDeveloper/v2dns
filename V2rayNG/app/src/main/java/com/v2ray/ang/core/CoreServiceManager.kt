@@ -277,6 +277,29 @@ object CoreServiceManager {
                     android.util.Base64.NO_WRAP
                 )
                 val filesDir = service.filesDir.absolutePath
+                libv2ray.Libv2ray.setCaptchaHandler(object : libv2ray.CaptchaHandler {
+                    override fun openCaptcha(url: String?) {
+                        if (url.isNullOrEmpty()) return
+                        LogUtil.i(AppConfig.TAG, "VK Captcha required: opening $url")
+                        try {
+                            val intent = Intent(service, com.v2ray.ang.ui.CaptchaActivity::class.java).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                putExtra("url", url)
+                            }
+                            service.startActivity(intent)
+                        } catch (e: Exception) {
+                            LogUtil.e(AppConfig.TAG, "Failed to open CaptchaActivity, falling back to browser", e)
+                            try {
+                                val browserIntent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                service.startActivity(browserIntent)
+                            } catch (ex: Exception) {
+                                LogUtil.e(AppConfig.TAG, "Failed to open browser for captcha", ex)
+                            }
+                        }
+                    }
+                })
                 libv2ray.Libv2ray.startVkTurnClient(vkTurnConfigBase64, "", filesDir)
                 if (!libv2ray.Libv2ray.isVkTurnClientRunning()) {
                     error("VK TURN client failed to start")

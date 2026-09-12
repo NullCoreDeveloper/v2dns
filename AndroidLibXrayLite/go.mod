@@ -3,6 +3,15 @@ module github.com/2dust/AndroidLibXrayLite
 go 1.26
 
 require (
+	github.com/bogdanfinn/fhttp v0.6.9
+	github.com/bogdanfinn/tls-client v1.16.0
+	github.com/google/uuid v1.6.0
+	github.com/pion/dtls/v3 v3.1.8
+	github.com/pion/logging v0.2.4
+	github.com/pion/transport/v4 v4.1.0
+	github.com/pion/turn/v5 v5.1.1
+	github.com/xtaci/kcp-go/v5 v5.6.72
+	github.com/xtaci/smux v1.5.57
 	github.com/xtls/xray-core v1.260327.1-0.20260728075948-5ca6f4b7d4dc
 	golang.org/x/mobile v0.0.0-20260520154334-0e4426e1883d
 	masterdnsvpn-go v0.0.0-00010101000000-000000000000
@@ -14,19 +23,13 @@ require (
 	github.com/apernet/quic-go v0.59.1-0.20260425001925-6c6cc9bcb716 // indirect
 	github.com/bdandy/go-errors v1.2.2 // indirect
 	github.com/bdandy/go-socks4 v1.2.3 // indirect
-	github.com/bogdanfinn/fhttp v0.6.9 // indirect
 	github.com/bogdanfinn/quic-go-utls v1.0.10-utls // indirect
-	github.com/bogdanfinn/tls-client v1.16.0 // indirect
 	github.com/bogdanfinn/utls v1.7.8-barnius // indirect
 	github.com/bogdanfinn/websocket v1.5.6-barnius // indirect
-	github.com/bschaatsbergen/dnsdialer v0.0.0-20260519163822-5bc149399b81 // indirect
-	github.com/cbeuw/connutil v1.0.1 // indirect
 	github.com/cloudflare/circl v1.6.4 // indirect
 	github.com/ghodss/yaml v1.0.1-0.20220118164431-d8423dcdf344 // indirect
 	github.com/google/btree v1.1.3 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
-	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/juju/ratelimit v1.0.2 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
@@ -34,13 +37,9 @@ require (
 	github.com/miekg/dns v1.1.72 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pierrec/lz4/v4 v4.1.26 // indirect
-	github.com/pion/dtls/v3 v3.1.8 // indirect
-	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
 	github.com/pion/stun/v3 v3.1.6 // indirect
 	github.com/pion/stun/v4 v4.0.0 // indirect
-	github.com/pion/transport/v4 v4.1.0 // indirect
-	github.com/pion/turn/v5 v5.1.1 // indirect
 	github.com/pires/go-proxyproto v0.15.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
@@ -54,8 +53,6 @@ require (
 	github.com/vishvananda/netlink v1.3.1 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
-	github.com/xtaci/kcp-go/v5 v5.6.72 // indirect
-	github.com/xtaci/smux v1.5.57 // indirect
 	github.com/xtls/reality v0.0.0-20260322125925-9234c772ba8f // indirect
 	go.uber.org/mock v0.6.0 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect

@@ -15,6 +15,7 @@ import com.v2ray.ang.enums.EConfigType
 import com.v2ray.ang.extension.toast
 import com.v2ray.ang.extension.toastSuccess
 import com.v2ray.ang.fmt.CustomFmt
+import com.v2ray.ang.fmt.VkTurnFmt
 import com.v2ray.ang.handler.AngConfigManager
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SettingsChangeManager
@@ -101,18 +102,14 @@ class ServerCustomConfigActivity : BaseActivity() {
             config.serverPort = "10808"
             config.description = "NullDnsTunneling client configuration"
         } else if (isVkTurn) {
+            val rawText = binding.editor.text.toString()
             try {
-                val json = com.google.gson.JsonParser.parseString(binding.editor.text.toString()).asJsonObject
-                if (!json.has("server") || json.get("server").asString.isNullOrEmpty()) {
-                    toast("Укажите server в JSON конфигурации")
+                com.google.gson.JsonParser.parseString(rawText)
+                VkTurnFmt.populateProfileFromJson(config, rawText)
+                if (config.server.isNullOrEmpty()) {
+                    toast("Укажите server или targetUri в JSON конфигурации")
                     return false
                 }
-                val server = json.get("server").asString
-                val port = if (json.has("port")) json.get("port").asString else "443"
-                val proto = if (json.has("targetProtocol")) json.get("targetProtocol").asString else "vless"
-                config.server = server
-                config.serverPort = port
-                config.description = "VK TURN -> $proto ($server:$port)"
             } catch (e: Exception) {
                 toast("Некорректный JSON конфиг: ${e.message}")
                 return false

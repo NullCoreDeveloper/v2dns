@@ -9,6 +9,7 @@ import com.v2ray.ang.enums.EConfigType
 import com.v2ray.ang.enums.NetworkType
 import com.v2ray.ang.extension.isNotNullEmpty
 import com.v2ray.ang.extension.nullIfBlank
+import com.v2ray.ang.fmt.VkTurnFmt
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.util.HttpUtil
 import com.v2ray.ang.util.JsonUtil
@@ -255,12 +256,17 @@ object CoreOutboundBuilder {
 
     private fun toOutboundVkTurn(profileItem: ProfileItem): OutboundBean? {
         val rawJson = profileItem.vkTurnRawConfig
+        if (!rawJson.isNullOrEmpty()) {
+            VkTurnFmt.populateProfileFromJson(profileItem, rawJson)
+        }
         var targetProtocol = "vless"
         if (!rawJson.isNullOrEmpty()) {
             try {
                 val jsonObject = com.google.gson.JsonParser.parseString(rawJson).asJsonObject
                 if (jsonObject.has("targetProtocol") && !jsonObject.get("targetProtocol").isJsonNull) {
                     targetProtocol = jsonObject.get("targetProtocol").asString.lowercase()
+                } else if (jsonObject.has("protocol") && !jsonObject.get("protocol").isJsonNull) {
+                    targetProtocol = jsonObject.get("protocol").asString.lowercase()
                 }
             } catch (e: Exception) {
                 LogUtil.e(AppConfig.TAG, "toOutboundVkTurn parse error", e)
@@ -284,6 +290,12 @@ object CoreOutboundBuilder {
                     server.password = profileItem.password
                     server.flow = profileItem.flow
                 }
+                val sni = outbound?.streamSettings?.let {
+                    populateTransportSettings(it, profileItem)
+                }
+                outbound?.streamSettings?.let {
+                    populateTlsSettings(it, profileItem, sni)
+                }
                 outbound
             }
             "vmess" -> {
@@ -293,6 +305,12 @@ object CoreOutboundBuilder {
                     vnext.port = targetPort
                     vnext.users[0].id = profileItem.password.orEmpty()
                     vnext.users[0].security = profileItem.method ?: "auto"
+                }
+                val sni = outbound?.streamSettings?.let {
+                    populateTransportSettings(it, profileItem)
+                }
+                outbound?.streamSettings?.let {
+                    populateTlsSettings(it, profileItem, sni)
                 }
                 outbound
             }

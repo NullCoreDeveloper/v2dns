@@ -41,47 +41,127 @@ object VkTurnFmt : FmtBase() {
 
             val config = ProfileItem.create(EConfigType.VKTURN)
             config.remarks = remarks
-            config.server = server
-            config.serverPort = port
-            config.description = "VK TURN -> $targetProtocol ($server:$port)"
-            config.vkTurnRawConfig = rawJson
-
-            if (jsonObject.has("clientId") && !jsonObject.get("clientId").isJsonNull) {
-                config.password = jsonObject.get("clientId").asString
-            } else if (jsonObject.has("clientPassword") && !jsonObject.get("clientPassword").isJsonNull) {
-                config.password = jsonObject.get("clientPassword").asString
-            }
-            if (jsonObject.has("flow") && !jsonObject.get("flow").isJsonNull) {
-                config.flow = jsonObject.get("flow").asString
-            }
-            if (jsonObject.has("method") && !jsonObject.get("method").isJsonNull) {
-                config.method = jsonObject.get("method").asString
-            } else {
-                config.method = "none"
-            }
-            if (jsonObject.has("network") && !jsonObject.get("network").isJsonNull) {
-                config.network = jsonObject.get("network").asString
-            } else {
-                config.network = "tcp"
-            }
-            if (jsonObject.has("security") && !jsonObject.get("security").isJsonNull) {
-                config.security = jsonObject.get("security").asString
-            } else {
-                config.security = "none"
-            }
-            if (jsonObject.has("sni") && !jsonObject.get("sni").isJsonNull) {
-                config.sni = jsonObject.get("sni").asString
-            }
-            if (jsonObject.has("path") && !jsonObject.get("path").isJsonNull) {
-                config.path = jsonObject.get("path").asString
-            }
-            if (jsonObject.has("host") && !jsonObject.get("host").isJsonNull) {
-                config.host = jsonObject.get("host").asString
-            }
-
+            populateProfileFromJson(config, rawJson)
             return config
         } catch (e: Exception) {
             return null
+        }
+    }
+
+    /**
+     * Populates all transport, security, and protocol fields from a JSON configuration string or embedded target URI.
+     */
+    fun populateProfileFromJson(config: ProfileItem, rawJson: String?) {
+        if (rawJson.isNullOrBlank()) return
+        try {
+            val jsonObject = com.google.gson.JsonParser.parseString(rawJson).asJsonObject
+            config.vkTurnRawConfig = rawJson
+
+            // 1. Check if user provided a full target URI (e.g. vless://..., trojan://..., etc.)
+            val targetUri = when {
+                jsonObject.has("targetUri") && !jsonObject.get("targetUri").isJsonNull -> jsonObject.get("targetUri").asString
+                jsonObject.has("vlessUri") && !jsonObject.get("vlessUri").isJsonNull -> jsonObject.get("vlessUri").asString
+                jsonObject.has("vlessLink") && !jsonObject.get("vlessLink").isJsonNull -> jsonObject.get("vlessLink").asString
+                jsonObject.has("url") && !jsonObject.get("url").isJsonNull -> jsonObject.get("url").asString
+                else -> null
+            }
+
+            if (!targetUri.isNullOrEmpty()) {
+                val parsed = VlessFmt.parse(targetUri)
+                    ?: TrojanFmt.parse(targetUri)
+                    ?: ShadowsocksFmt.parse(targetUri)
+                if (parsed != null) {
+                    config.server = parsed.server
+                    config.serverPort = parsed.serverPort
+                    config.password = parsed.password
+                    config.method = parsed.method
+                    config.flow = parsed.flow
+                    config.network = parsed.network
+                    config.headerType = parsed.headerType
+                    config.host = parsed.host
+                    config.path = parsed.path
+                    config.seed = parsed.seed
+                    config.quicSecurity = parsed.quicSecurity
+                    config.quicKey = parsed.quicKey
+                    config.mode = parsed.mode
+                    config.serviceName = parsed.serviceName
+                    config.authority = parsed.authority
+                    config.xhttpMode = parsed.xhttpMode
+                    config.xhttpExtra = parsed.xhttpExtra
+                    config.finalMask = parsed.finalMask
+                    config.security = parsed.security
+                    config.sni = parsed.sni
+                    config.alpn = parsed.alpn
+                    config.fingerPrint = parsed.fingerPrint
+                    config.insecure = parsed.insecure
+                    config.publicKey = parsed.publicKey
+                    config.shortId = parsed.shortId
+                    config.spiderX = parsed.spiderX
+                }
+            }
+
+            // 2. Direct JSON keys take precedence or serve as primary config
+            fun getString(vararg keys: String): String? {
+                for (k in keys) {
+                    if (jsonObject.has(k) && !jsonObject.get(k).isJsonNull) {
+                        return jsonObject.get(k).asString
+                    }
+                }
+                return null
+            }
+
+            fun getBoolean(vararg keys: String): Boolean? {
+                for (k in keys) {
+                    if (jsonObject.has(k) && !jsonObject.get(k).isJsonNull) {
+                        return jsonObject.get(k).asBoolean
+                    }
+                }
+                return null
+            }
+
+            getString("server", "address")?.let { config.server = it }
+            getString("port")?.let { config.serverPort = it }
+            getString("clientId", "clientPassword", "uuid", "password", "id")?.let { config.password = it }
+            getString("flow")?.let { config.flow = it }
+            getString("method", "encryption")?.let { config.method = it } ?: run {
+                if (config.method.isNullOrEmpty()) config.method = "none"
+            }
+            getString("network", "type")?.let { config.network = it } ?: run {
+                if (config.network.isNullOrEmpty()) config.network = "tcp"
+            }
+            getString("headerType")?.let { config.headerType = it }
+            getString("host")?.let { config.host = it }
+            getString("path")?.let { config.path = it }
+            getString("seed")?.let { config.seed = it }
+            getString("mode", "xhttpMode")?.let {
+                config.mode = it
+                config.xhttpMode = it
+            }
+            if (jsonObject.has("xhttpExtra") && jsonObject.get("xhttpExtra").isJsonObject) {
+                config.xhttpExtra = jsonObject.get("xhttpExtra").toString()
+            } else if (jsonObject.has("extra") && jsonObject.get("extra").isJsonObject) {
+                config.xhttpExtra = jsonObject.get("extra").toString()
+            } else {
+                getString("extra", "xhttpExtra")?.let { config.xhttpExtra = it }
+            }
+            getString("serviceName")?.let { config.serviceName = it }
+            getString("authority")?.let { config.authority = it }
+            getString("security")?.let { config.security = it } ?: run {
+                if (config.security.isNullOrEmpty()) config.security = "none"
+            }
+            getString("sni", "serverName")?.let { config.sni = it }
+            getString("fingerprint", "fp")?.let { config.fingerPrint = it }
+            getString("alpn")?.let { config.alpn = it }
+            getString("publicKey", "pbk")?.let { config.publicKey = it }
+            getString("shortId", "sid")?.let { config.shortId = it }
+            getString("spiderX", "spx")?.let { config.spiderX = it }
+            getBoolean("insecure", "allowInsecure")?.let { config.insecure = it }
+            getString("finalMask", "fm")?.let { config.finalMask = it }
+
+            val targetProtocol = getString("targetProtocol", "protocol") ?: "vless"
+            config.description = "VK TURN -> $targetProtocol (${config.server.orEmpty()}:${config.serverPort.orEmpty()})"
+        } catch (e: Exception) {
+            android.util.Log.e(com.v2ray.ang.AppConfig.TAG, "populateProfileFromJson error", e)
         }
     }
 

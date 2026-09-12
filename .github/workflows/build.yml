@@ -79,7 +79,9 @@ jobs:
       uses: actions/cache/restore@v4
       with:
         path: ${{ github.workspace }}/V2rayNG/app/libs/libv2ray.aar
-        key: libv2ray-${{ runner.os }}-${{ env.NDK_HOME }}-${{ hashFiles('AndroidLibXrayLite/**') }}-${{ hashFiles('MasterDnsVPN/**') }}
+        key: libv2ray-${{ runner.os }}-${{ env.NDK_HOME }}-${{ hashFiles('AndroidLibXrayLite/**/*.go', 'AndroidLibXrayLite/go.mod', 'AndroidLibXrayLite/go.sum', 'MasterDnsVPN/**/*.go', 'MasterDnsVPN/go.mod', 'MasterDnsVPN/go.sum') }}
+        restore-keys: |
+          libv2ray-${{ runner.os }}-${{ env.NDK_HOME }}-
 
     - name: Setup Golang
       if: steps.cache-libv2ray-restore.outputs.cache-hit != 'true'
@@ -103,6 +105,7 @@ jobs:
         gomobile bind -trimpath -v -androidapi 24 -target=android -ldflags='-checklinkname=0 -s -w -buildid=' -o libv2ray.aar ./
         mkdir -p ${{ github.workspace }}/V2rayNG/app/libs
         cp -v libv2ray.aar ${{ github.workspace }}/V2rayNG/app/libs/
+        rm -f libv2ray.aar
       env:
         ANDROID_HOME: ${{ env.ANDROID_HOME }}
         ANDROID_NDK_HOME: ${{ env.NDK_HOME }}
@@ -112,7 +115,7 @@ jobs:
       uses: actions/cache/save@v4
       with:
         path: ${{ github.workspace }}/V2rayNG/app/libs/libv2ray.aar
-        key: libv2ray-${{ runner.os }}-${{ env.NDK_HOME }}-${{ hashFiles('AndroidLibXrayLite/**') }}-${{ hashFiles('MasterDnsVPN/**') }}
+        key: libv2ray-${{ runner.os }}-${{ env.NDK_HOME }}-${{ hashFiles('AndroidLibXrayLite/**/*.go', 'AndroidLibXrayLite/go.mod', 'AndroidLibXrayLite/go.sum', 'MasterDnsVPN/**/*.go', 'MasterDnsVPN/go.mod', 'MasterDnsVPN/go.sum') }}
 
 
 

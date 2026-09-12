@@ -410,18 +410,14 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
         } else if (createConfigType == EConfigType.VKTURN.value) {
             val guid = Utils.getUuid()
             val initialJson = """{
-  "server": "1.2.3.4",
-  "port": 443,
-  "targetProtocol": "vless",
+  "targetUri": "vless://00000000-0000-0000-0000-000000000000@your-domain.com:443?type=xhttp&mode=auto&path=%2F&security=reality&pbk=YOUR_PUBLIC_KEY&fp=chrome&sni=your-domain.com&sid=YOUR_SHORT_ID#MyProxy",
   "vkLink": "aD0YV1u9x_8m51L9H4fQ_6_16089",
   "streams": 2
 }"""
             val profile = ProfileItem.create(EConfigType.VKTURN)
             profile.remarks = "VK TURN Proxy"
-            profile.server = "1.2.3.4"
-            profile.serverPort = "443"
-            profile.description = "VK TURN -> vless (1.2.3.4:443)"
             profile.subscriptionId = mainViewModel.subscriptionId
+            com.v2ray.ang.fmt.VkTurnFmt.populateProfileFromJson(profile, initialJson)
             MmkvManager.encodeServerConfig(guid, profile)
             MmkvManager.encodeServerRaw(guid, initialJson)
 

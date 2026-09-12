@@ -181,16 +181,28 @@ func fetchCaptchaBootstrap(ctx context.Context, redirectURI string, client tlscl
 	}
 	html := string(body)
 
-	powInputRe := regexp.MustCompile(`const\s+powInput\s*=\s*"([^"]+)"`)
+	// The PoW parameters are now obfuscated at the end of the script: }("seed", difficulty, "error_string"));
+	powInputRe := regexp.MustCompile(`\}\(["']([^"']+)["']\s*,\s*(\d+)\s*,\s*["'][^"']+["']\)\);`)
 	powInputMatch := powInputRe.FindStringSubmatch(html)
-	if len(powInputMatch) < 2 {
+	if len(powInputMatch) >= 3 {
+		diff, _ := strconv.Atoi(powInputMatch[2])
+		return &captchaBootstrap{
+			PowInput:   powInputMatch[1],
+			Difficulty: diff,
+		}, nil
+	}
+
+	// Fallback to older format if the obfuscation changes back
+	oldPowInputRe := regexp.MustCompile(`powInput\s*=\s*['"]([^'"]+)['"]`)
+	oldPowInputMatch := oldPowInputRe.FindStringSubmatch(html)
+	if len(oldPowInputMatch) < 2 {
 		return nil, fmt.Errorf("powInput not found in captcha HTML")
 	}
 
 	difficulty := 2
 	for _, expr := range []*regexp.Regexp{
 		regexp.MustCompile(`startsWith\('0'\.repeat\((\d+)\)\)`),
-		regexp.MustCompile(`const\s+difficulty\s*=\s*(\d+)`),
+		regexp.MustCompile(`difficulty\s*=\s*(\d+)`),
 	} {
 		if match := expr.FindStringSubmatch(html); len(match) >= 2 {
 			if parsed, err := strconv.Atoi(match[1]); err == nil {
@@ -201,7 +213,7 @@ func fetchCaptchaBootstrap(ctx context.Context, redirectURI string, client tlscl
 	}
 
 	return &captchaBootstrap{
-		PowInput:   powInputMatch[1],
+		PowInput:   oldPowInputMatch[1],
 		Difficulty: difficulty,
 	}, nil
 }

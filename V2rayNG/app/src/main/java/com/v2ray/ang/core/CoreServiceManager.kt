@@ -375,7 +375,7 @@ object CoreServiceManager {
      */
     fun stopCoreLoop(): Boolean {
         val service = getService()
-        val appContext = service ?: com.v2ray.ang.AngApplication.applicationContext
+        val appContext = service ?: com.v2ray.ang.AngApplication.application
 
         if (currentConfig?.configType == EConfigType.MDNS) {
             LogUtil.i(AppConfig.TAG, "StartCore-Manager: Stopping MasterDNSVPN client")

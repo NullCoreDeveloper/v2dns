@@ -142,8 +142,9 @@ func (p *sessionPool) closeAll() {
 }
 
 type dtlsPool struct {
-	mu    sync.RWMutex
-	conns []net.Conn
+	mu      sync.RWMutex
+	conns   []net.Conn
+	current uint64
 }
 
 func (p *dtlsPool) add(c net.Conn) {
@@ -169,16 +170,14 @@ func (p *dtlsPool) count() int {
 	return len(p.conns)
 }
 
-// pick returns the primary (first) connection for sticky routing.
-// WireGuard requires all packets to flow through a single transport path
-// to avoid reordering, which would cause the kernel to drop packets.
 func (p *dtlsPool) pick() net.Conn {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if len(p.conns) == 0 {
 		return nil
 	}
-	return p.conns[0]
+	idx := atomic.AddUint64(&p.current, 1) - 1
+	return p.conns[idx%uint64(len(p.conns))]
 }
 
 func (p *dtlsPool) isAlive(c net.Conn) bool {
@@ -427,6 +426,8 @@ func fetchVkCreds(ctx context.Context, link string, customCred *VKCredentials, s
 		log.Printf("[STREAM %d] [VK Auth] Using cached TURN credentials (cache=%d, expires in %v, server=%s)", streamID, cIdx, time.Until(c.expiresAt).Round(time.Second), addrs[0])
 		return u, p, addrs, nil
 	}
+	credsCacheMu.RUnlock()
+
 	select {
 	case <-ctx.Done():
 		return "", "", nil, ctx.Err()
@@ -741,7 +742,6 @@ func createRawDtlsConn(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr
 			Username:                  user,
 			Password:                  pass,
 			RequestedAddressFamily:    addrFamily,
-			PermissionRefreshInterval: 24 * time.Hour,
 			LoggerFactory:             logging.NewDefaultLoggerFactory(),
 		})
 		if err != nil {
@@ -1176,7 +1176,6 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 			}()
 
 			buf := make([]byte, 65535)
-			var stickyConn net.Conn
 			for {
 				n, srcAddr, rErr := conn.ReadFrom(buf)
 				if rErr != nil {
@@ -1184,20 +1183,11 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 				}
 				activeClientAddr.Store(srcAddr)
 
-				// Ensure stickyConn is non-nil and still alive in the active pool
-				if stickyConn == nil || !pool.isAlive(stickyConn) {
-					stickyConn = pool.pick()
-				}
-				if stickyConn != nil {
-					if _, werr := stickyConn.Write(buf[:n]); werr != nil {
-						// Primary conn failed write — evict it immediately
-						// and pick the next active one.
-						pool.remove(stickyConn)
-						_ = stickyConn.Close()
-						stickyConn = pool.pick()
-						if stickyConn != nil {
-							_, _ = stickyConn.Write(buf[:n])
-						}
+				dtlsConn := pool.pick()
+				if dtlsConn != nil {
+					if _, werr := dtlsConn.Write(buf[:n]); werr != nil {
+						pool.remove(dtlsConn)
+						_ = dtlsConn.Close()
 					}
 				}
 			}

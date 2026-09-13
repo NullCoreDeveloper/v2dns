@@ -61,8 +61,8 @@ object NotificationManager {
      * Shows the notification.
      * @param currentConfig The current profile configuration.
      */
-    fun showNotification(currentConfig: ProfileItem?) {
-        val service = getService() ?: return
+    fun showNotification(currentConfig: ProfileItem?, explicitService: Service? = null) {
+        val service = explicitService ?: getService() ?: return
 
         // Reset last query time to avoid querying stats too soon after showing the notification
         lastQueryTime = System.currentTimeMillis()

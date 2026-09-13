@@ -415,6 +415,12 @@ func getTokenChain(ctx context.Context, link string, creds VKCredentials, stream
 	name := generateName()
 	escapedName := neturl.QueryEscape(name)
 
+	captchaPlatform := CaptchaPlatformDesktop
+	if profile.SecChUaMobile == "?1" {
+		captchaPlatform = CaptchaPlatformMobile
+	}
+	captchaProfile := ProfileFor(captchaPlatform, CaptchaIdentity{Seed: name, Gen: 0})
+
 	doRequest := func(data, url string) (map[string]interface{}, error) {
 		parsedURL, err := neturl.Parse(url)
 		if err != nil {
@@ -492,20 +498,12 @@ func getTokenChain(ctx context.Context, link string, creds VKCredentials, stream
 		if errObj, hasErr := resp["error"].(map[string]interface{}); hasErr {
 			captchaErr := ParseVkCaptchaError(errObj)
 			if captchaErr != nil && captchaErr.IsCaptchaError() {
-				successToken, solveErr := solveVkCaptcha(ctx, captchaErr, streamID, client, profile)
+				successToken, solveErr := SolveCaptcha(ctx, captchaErr, streamID, client, captchaProfile)
 				if solveErr != nil {
-					log.Printf("[STREAM %d] [VK Captcha] Auto PoW solve failed: %v. Triggering manual captcha fallback...", streamID, solveErr)
+					log.Printf("[STREAM %d] [VK Captcha] Auto solve failed: %v. Triggering manual captcha fallback...", streamID, solveErr)
 					var manualErr error
 					if captchaErr.RedirectURI != "" {
 						successToken, manualErr = solveCaptchaViaProxy(captchaErr.RedirectURI)
-					} else if captchaErr.CaptchaImg != "" {
-						var captchaKey string
-						captchaKey, manualErr = solveCaptchaViaHTTP(captchaErr.CaptchaImg)
-						if manualErr == nil && captchaKey != "" {
-							data = fmt.Sprintf("vk_join_link=https://vk.com/call/join/%s&name=%s&captcha_key=%s&captcha_sid=%s&access_token=%s",
-								link, escapedName, neturl.QueryEscape(captchaKey), captchaErr.CaptchaSid, token1)
-							continue
-						}
 					}
 					if manualErr != nil {
 						globalLockout.Store(time.Now().Add(10 * time.Second).Unix())

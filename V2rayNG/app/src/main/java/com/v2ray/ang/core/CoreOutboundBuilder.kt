@@ -259,7 +259,7 @@ object CoreOutboundBuilder {
         if (!rawJson.isNullOrEmpty()) {
             VkTurnFmt.populateProfileFromJson(profileItem, rawJson)
         }
-        var targetProtocol = "vless"
+        var targetProtocol = "wireguard"
         if (!rawJson.isNullOrEmpty()) {
             try {
                 val jsonObject = com.google.gson.JsonParser.parseString(rawJson).asJsonObject
@@ -278,10 +278,41 @@ object CoreOutboundBuilder {
         } catch (e: Throwable) {
             0
         }
-        val targetPort: Int = if (runningPort > 0) runningPort else (profileItem.serverPort?.toIntOrNull() ?: 10808)
+        val targetPort: Int = if (runningPort > 0) runningPort else (profileItem.serverPort?.toIntOrNull() ?: 51820)
         val targetAddress = AppConfig.LOOPBACK
 
+        val buildWireguard = {
+            val outbound = createInitOutbound(EConfigType.WIREGUARD)
+            val rawAddresses = profileItem.localAddress
+                ?.split(",")
+                ?.map { it.trim() }
+                ?.filter { it.isNotEmpty() }
+                ?.ifEmpty { null }
+                ?: listOf("10.66.0.2/32")
+
+            val addresses = if (MmkvManager.decodeSettingsBool(AppConfig.PREF_IPV6_ENABLED) == true) {
+                rawAddresses
+            } else {
+                val ipv4Addresses = rawAddresses.filter { !it.contains(":") }
+                ipv4Addresses.ifEmpty { listOf("10.66.0.2/32") }
+            }
+
+            outbound?.settings?.let { wireguard ->
+                wireguard.secretKey = profileItem.secretKey
+                wireguard.address = addresses
+                wireguard.peers?.firstOrNull()?.let { peer ->
+                    peer.publicKey = profileItem.publicKey.orEmpty()
+                    peer.preSharedKey = profileItem.preSharedKey?.nullIfBlank()
+                    peer.endpoint = "$targetAddress:$targetPort"
+                }
+                wireguard.mtu = profileItem.mtu ?: 1280
+                wireguard.reserved = profileItem.reserved?.takeIf { it.isNotBlank() }?.split(",")?.filter { it.isNotBlank() }?.map { it.trim().toInt() }
+            }
+            outbound
+        }
+
         return when (targetProtocol) {
+            "wireguard", "udp" -> buildWireguard()
             "trojan" -> {
                 val outbound = createInitOutbound(EConfigType.TROJAN)
                 outbound?.settings?.servers?.firstOrNull()?.let { server ->
@@ -332,7 +363,7 @@ object CoreOutboundBuilder {
                 }
                 outbound
             }
-            else -> {
+            "vless" -> {
                 val outbound = createInitOutbound(EConfigType.VLESS)
                 outbound?.settings?.vnext?.firstOrNull()?.let { vnext ->
                     vnext.address = targetAddress
@@ -348,6 +379,27 @@ object CoreOutboundBuilder {
                     populateTlsSettings(it, profileItem, sni)
                 }
                 outbound
+            }
+            else -> {
+                if (!profileItem.secretKey.isNullOrEmpty()) {
+                    buildWireguard()
+                } else {
+                    val outbound = createInitOutbound(EConfigType.VLESS)
+                    outbound?.settings?.vnext?.firstOrNull()?.let { vnext ->
+                        vnext.address = targetAddress
+                        vnext.port = targetPort
+                        vnext.users[0].id = profileItem.password.orEmpty()
+                        vnext.users[0].encryption = if (profileItem.method.isNullOrEmpty()) "none" else profileItem.method
+                        vnext.users[0].flow = profileItem.flow
+                    }
+                    val sni = outbound?.streamSettings?.let {
+                        populateTransportSettings(it, profileItem)
+                    }
+                    outbound?.streamSettings?.let {
+                        populateTlsSettings(it, profileItem, sni)
+                    }
+                    outbound
+                }
             }
         }
     }

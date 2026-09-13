@@ -46,7 +46,8 @@ object AngConfigManager {
             EConfigType.HYSTERIA2.protocolScheme to Hysteria2Fmt::parse,
             AppConfig.HY2 to Hysteria2Fmt::parse,
             EConfigType.MDNS.protocolScheme to MdnsFmt::parse,
-            EConfigType.VKTURN.protocolScheme to VkTurnFmt::parse
+            EConfigType.VKTURN.protocolScheme to VkTurnFmt::parse,
+            "freeturn://" to VkTurnFmt::parse
         )
     }
 

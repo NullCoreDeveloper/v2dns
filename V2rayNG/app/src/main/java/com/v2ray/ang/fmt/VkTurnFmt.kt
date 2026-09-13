@@ -9,19 +9,82 @@ object VkTurnFmt : FmtBase() {
     /**
      * Parses a VK TURN URI string into a ProfileItem object.
      * Format: vkturn://<base64-encoded-JSON-config>#<remarks-url-encoded>
+     * Or: freeturn://<base64url-encoded-JSON-config>
      *
-     * @param str the VK TURN URI string to parse
+     * @param str the VK TURN / FreeTURN URI string to parse
      * @return the parsed ProfileItem object, or null if parsing fails
      */
     fun parse(str: String): ProfileItem? {
         try {
-            var rawUri = str
-            var remarks = "VK TURN Proxy"
+            var rawUri = str.trim()
+            if (rawUri.isEmpty()) return null
 
-            val hashIdx = str.indexOf('#')
+            // Support freeturn:// format (compatible with turn-proxy-android)
+            if (rawUri.startsWith("freeturn://", ignoreCase = true)) {
+                val payload = rawUri.substring(11).trim()
+                val jsonStr = try {
+                    val decodedBytes = android.util.Base64.decode(payload, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
+                    String(decodedBytes, Charsets.UTF_8)
+                } catch (e: Exception) {
+                    Utils.decode(payload)
+                }
+                if (jsonStr.isNullOrEmpty()) return null
+
+                val jsonObject = com.google.gson.JsonParser.parseString(jsonStr).asJsonObject
+                val config = ProfileItem.create(EConfigType.VKTURN)
+                val name = if (jsonObject.has("name") && !jsonObject.get("name").isJsonNull) jsonObject.get("name").asString else "FreeTURN (VK)"
+                config.remarks = name.ifEmpty { "FreeTURN (VK)" }
+
+                // Check peer ("IP:PORT")
+                if (jsonObject.has("peer") && !jsonObject.get("peer").isJsonNull) {
+                    val peer = jsonObject.get("peer").asString
+                    val parts = peer.split(":")
+                    if (parts.isNotEmpty()) config.server = parts[0]
+                    if (parts.size >= 2) config.serverPort = parts[1]
+                }
+
+                // If WireGuard config text is embedded
+                if (jsonObject.has("wg") && !jsonObject.get("wg").isJsonNull) {
+                    val wgText = jsonObject.get("wg").asString
+                    if (wgText.isNotEmpty()) {
+                        val wgParsed = WireguardFmt.parseWireguardConfFile(wgText)
+                        config.secretKey = wgParsed.secretKey
+                        config.publicKey = wgParsed.publicKey
+                        config.localAddress = wgParsed.localAddress
+                        if (wgParsed.mtu != null && wgParsed.mtu!! > 0) config.mtu = wgParsed.mtu
+                        if (config.server.isNullOrEmpty() && !wgParsed.server.isNullOrEmpty()) {
+                            config.server = wgParsed.server
+                            config.serverPort = wgParsed.serverPort
+                        }
+                    }
+                }
+
+                val vkLink = if (jsonObject.has("vk") && !jsonObject.get("vk").isJsonNull) jsonObject.get("vk").asString else ""
+                val streams = if (jsonObject.has("n") && !jsonObject.get("n").isJsonNull) jsonObject.get("n").asInt else 10
+
+                // Synthesize JSON for vkturncore
+                val synthesized = com.google.gson.JsonObject()
+                synthesized.addProperty("server", config.server ?: "127.0.0.1")
+                synthesized.addProperty("port", config.serverPort?.toIntOrNull() ?: 443)
+                synthesized.addProperty("targetProtocol", "wireguard")
+                synthesized.addProperty("vkLink", vkLink)
+                synthesized.addProperty("streams", streams)
+                synthesized.addProperty("secretKey", config.secretKey ?: "")
+                synthesized.addProperty("publicKey", config.publicKey ?: "")
+                synthesized.addProperty("address", config.localAddress ?: "10.66.0.2/32")
+                synthesized.addProperty("mtu", config.mtu ?: 1280)
+
+                config.vkTurnRawConfig = synthesized.toString()
+                config.description = "VK TURN -> wireguard (${config.server.orEmpty()}:${config.serverPort.orEmpty()})"
+                return config
+            }
+
+            // Standard vkturn:// format
+            var remarks = "VK TURN Proxy"
+            val hashIdx = rawUri.indexOf('#')
             if (hashIdx >= 0) {
-                rawUri = str.substring(0, hashIdx)
-                val fragment = str.substring(hashIdx + 1)
+                val fragment = rawUri.substring(hashIdx + 1)
+                rawUri = rawUri.substring(0, hashIdx)
                 if (fragment.isNotEmpty()) {
                     remarks = Utils.decodeURIComponent(fragment)
                 }
@@ -32,12 +95,6 @@ object VkTurnFmt : FmtBase() {
             if (TextUtils.isEmpty(rawJson)) {
                 return null
             }
-
-            // Verify it is a valid JSON
-            val jsonObject = com.google.gson.JsonParser.parseString(rawJson).asJsonObject
-            val server = if (jsonObject.has("server")) jsonObject.get("server").asString else "127.0.0.1"
-            val port = if (jsonObject.has("port")) jsonObject.get("port").asString else "443"
-            val targetProtocol = if (jsonObject.has("targetProtocol")) jsonObject.get("targetProtocol").asString else "vless"
 
             val config = ProfileItem.create(EConfigType.VKTURN)
             config.remarks = remarks
@@ -57,7 +114,21 @@ object VkTurnFmt : FmtBase() {
             val jsonObject = com.google.gson.JsonParser.parseString(rawJson).asJsonObject
             config.vkTurnRawConfig = rawJson
 
-            // 1. Check if user provided a full target URI (e.g. vless://..., trojan://..., etc.)
+            // 1. Check if user provided an embedded WireGuard config
+            val wgConfStr = when {
+                jsonObject.has("wgConf") && !jsonObject.get("wgConf").isJsonNull -> jsonObject.get("wgConf").asString
+                jsonObject.has("wg") && !jsonObject.get("wg").isJsonNull -> jsonObject.get("wg").asString
+                else -> null
+            }
+            if (!wgConfStr.isNullOrEmpty()) {
+                val wgParsed = WireguardFmt.parseWireguardConfFile(wgConfStr)
+                if (!wgParsed.secretKey.isNullOrEmpty()) config.secretKey = wgParsed.secretKey
+                if (!wgParsed.publicKey.isNullOrEmpty()) config.publicKey = wgParsed.publicKey
+                if (!wgParsed.localAddress.isNullOrEmpty()) config.localAddress = wgParsed.localAddress
+                if (wgParsed.mtu != null && wgParsed.mtu!! > 0) config.mtu = wgParsed.mtu
+            }
+
+            // 2. Check if user provided a full target URI (e.g. vless://..., trojan://..., etc.)
             val targetUri = when {
                 jsonObject.has("targetUri") && !jsonObject.get("targetUri").isJsonNull -> jsonObject.get("targetUri").asString
                 jsonObject.has("vlessUri") && !jsonObject.get("vlessUri").isJsonNull -> jsonObject.get("vlessUri").asString
@@ -100,7 +171,7 @@ object VkTurnFmt : FmtBase() {
                 }
             }
 
-            // 2. Direct JSON keys take precedence or serve as primary config
+            // 3. Direct JSON keys take precedence or serve as primary config
             fun getString(vararg keys: String): String? {
                 for (k in keys) {
                     if (jsonObject.has(k) && !jsonObject.get(k).isJsonNull) {
@@ -158,7 +229,14 @@ object VkTurnFmt : FmtBase() {
             getBoolean("insecure", "allowInsecure")?.let { config.insecure = it }
             getString("finalMask", "fm")?.let { config.finalMask = it }
 
-            val targetProtocol = getString("targetProtocol", "protocol") ?: "vless"
+            // WireGuard specific direct keys
+            getString("secretKey", "clientPrivateKey", "privateKey")?.let { config.secretKey = it }
+            getString("localAddress", "clientAddress", "address")?.let { config.localAddress = it }
+            getString("preSharedKey", "presharedkey", "psk")?.let { config.preSharedKey = it }
+            getString("reserved")?.let { config.reserved = it }
+            getString("mtu")?.toIntOrNull()?.let { config.mtu = it }
+
+            val targetProtocol = getString("targetProtocol", "protocol") ?: "wireguard"
             config.description = "VK TURN -> $targetProtocol (${config.server.orEmpty()}:${config.serverPort.orEmpty()})"
         } catch (e: Exception) {
             android.util.Log.e(com.v2ray.ang.AppConfig.TAG, "populateProfileFromJson error", e)

@@ -93,15 +93,57 @@ func (p *sessionPool) pick() *smux.Session {
 	return s
 }
 
+type dtlsPool struct {
+	mu      sync.RWMutex
+	conns   []net.Conn
+	current uint64
+}
+
+func (p *dtlsPool) add(c net.Conn) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.conns = append(p.conns, c)
+}
+
+func (p *dtlsPool) remove(c net.Conn) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i, conn := range p.conns {
+		if conn == c {
+			p.conns = append(p.conns[:i], p.conns[i+1:]...)
+			break
+		}
+	}
+}
+
+func (p *dtlsPool) count() int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return len(p.conns)
+}
+
+func (p *dtlsPool) pick() net.Conn {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if len(p.conns) == 0 {
+		return nil
+	}
+	idx := atomic.AddUint64(&p.current, 1) - 1
+	return p.conns[idx%uint64(len(p.conns))]
+}
+
 // Global Client Runtime State
 var (
-	clientMu        sync.Mutex
-	clientRunning   bool
-	clientCancel    context.CancelFunc
-	activeListener  net.Listener
-	activePool      *sessionPool
-	activeLocalPort int
-	globalLockout   atomic.Int64
+	clientMu         sync.Mutex
+	clientRunning    bool
+	clientCancel     context.CancelFunc
+	activeListener   net.Listener
+	activePacketConn net.PacketConn
+	activePool       *sessionPool
+	activeDtlsPool   *dtlsPool
+	activeLocalPort  int
+	globalLockout    atomic.Int64
+	activeClientAddr atomic.Value // holds net.Addr
 )
 
 type turnCachedCreds struct {
@@ -542,7 +584,7 @@ func getTokenChain(ctx context.Context, link string, creds VKCredentials, stream
 	return user, pass, addresses, nil
 }
 
-func createSmuxSession(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr, streamID int) (*smux.Session, func(), error) {
+func createRawDtlsConn(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr, streamID int) (net.Conn, func(), error) {
 	var cleanupFns []func()
 	cleanup := func() {
 		for i := len(cleanupFns) - 1; i >= 0; i-- {
@@ -670,6 +712,23 @@ func createSmuxSession(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr
 	}
 	cleanupFns = append(cleanupFns, func() { _ = dtlsConn.Close() })
 
+	return dtlsConn, cleanup, nil
+}
+
+func createSmuxSession(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr, streamID int) (*smux.Session, func(), error) {
+	dtlsConn, dtlsCleanup, err := createRawDtlsConn(ctx, cfg, peer, streamID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var cleanupFns []func()
+	cleanupFns = append(cleanupFns, dtlsCleanup)
+	cleanup := func() {
+		for i := len(cleanupFns) - 1; i >= 0; i-- {
+			cleanupFns[i]()
+		}
+	}
+
 	kcpSess, err := NewKCPOverDTLS(dtlsConn, false)
 	if err != nil {
 		cleanup()
@@ -685,6 +744,65 @@ func createSmuxSession(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr
 	cleanupFns = append(cleanupFns, func() { _ = smuxSess.Close() })
 
 	return smuxSess, cleanup, nil
+}
+
+func maintainDtlsSession(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr, id int, pool *dtlsPool, pc net.PacketConn) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		conn, cleanup, err := createRawDtlsConn(ctx, cfg, peer, id)
+		if err != nil {
+			log.Printf("[STREAM %d] Setup DTLS error: %v, retrying in 3s...", id, err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(3 * time.Second):
+			}
+			continue
+		}
+
+		pool.add(conn)
+		log.Printf("[STREAM %d] Connected to VK TURN UDP tunnel (active: %d)", id, pool.count())
+
+		rxDone := make(chan struct{})
+		go func(c net.Conn) {
+			defer close(rxDone)
+			rxBuf := make([]byte, 2048)
+			for {
+				n, rErr := c.Read(rxBuf)
+				if rErr != nil {
+					return
+				}
+				if ca := activeClientAddr.Load(); ca != nil {
+					if targetAddr, ok := ca.(net.Addr); ok {
+						_, _ = pc.WriteTo(rxBuf[:n], targetAddr)
+					}
+				}
+			}
+		}(conn)
+
+		select {
+		case <-ctx.Done():
+			pool.remove(conn)
+			cleanup()
+			return
+		case <-rxDone:
+		}
+
+		pool.remove(conn)
+		cleanup()
+		log.Printf("[STREAM %d] Disconnected from VK TURN UDP tunnel, reconnecting...", id)
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 func maintainSession(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr, id int, pool *sessionPool) {
@@ -773,9 +891,15 @@ func stopVkTurnClientLocked() {
 		_ = activeListener.Close()
 		activeListener = nil
 	}
+	if activePacketConn != nil {
+		_ = activePacketConn.Close()
+		activePacketConn = nil
+	}
 	clientRunning = false
 	activePool = nil
+	activeDtlsPool = nil
 	activeLocalPort = 0
+	activeClientAddr.Store(nil)
 	globalLockout.Store(0)
 	clearAllCachedCreds()
 }
@@ -810,10 +934,10 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 		cfg.VkLink = "aD0YV1u9x_8m51L9H4fQ_6_16089" // fallback default conference link
 	}
 	if cfg.Streams <= 0 {
-		cfg.Streams = 2
+		cfg.Streams = 10
 	}
-	if cfg.Streams > 8 {
-		cfg.Streams = 8
+	if cfg.Streams > 16 {
+		cfg.Streams = 16
 	}
 
 	peerAddr := fmt.Sprintf("%s:%d", cfg.Server, cfg.Port)
@@ -822,20 +946,87 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 		return fmt.Errorf("failed to resolve target server %s: %w", peerAddr, err)
 	}
 
+	isWireguard := (cfg.TargetProtocol == "wireguard" || cfg.TargetProtocol == "udp" || cfg.TargetProtocol == "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	clientCancel = cancel
+	clientRunning = true
+
+	if isWireguard {
+		listenAddr := fmt.Sprintf("127.0.0.1:%d", cfg.LocalPort)
+		pc, err := net.ListenPacket("udp", listenAddr)
+		if err != nil {
+			cancel()
+			clientRunning = false
+			return fmt.Errorf("failed to listen UDP on %s: %w", listenAddr, err)
+		}
+
+		udpAddr, _ := pc.LocalAddr().(*net.UDPAddr)
+		activeLocalPort = udpAddr.Port
+		activePacketConn = pc
+		log.Printf("[VK TURN Client] Listening UDP on 127.0.0.1:%d for WireGuard traffic to %s (streams: %d)", activeLocalPort, peerAddr, cfg.Streams)
+
+		pool := &dtlsPool{}
+		activeDtlsPool = pool
+
+		// Staggered session maintenance goroutines
+		for i := 0; i < cfg.Streams; i++ {
+			go func(id int) {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Duration(id) * 350 * time.Millisecond):
+				}
+				maintainDtlsSession(ctx, &cfg, peerUDP, id+1, pool, pc)
+			}(i)
+		}
+
+		// Local UDP forwarder loop
+		go func(conn net.PacketConn, c context.Context) {
+			defer func() {
+				_ = conn.Close()
+				clientMu.Lock()
+				if activePacketConn == conn {
+					clientRunning = false
+					clientCancel = nil
+					activePacketConn = nil
+					activeLocalPort = 0
+					activeDtlsPool = nil
+				}
+				clientMu.Unlock()
+			}()
+
+			buf := make([]byte, 2048)
+			for {
+				n, srcAddr, rErr := conn.ReadFrom(buf)
+				if rErr != nil {
+					return
+				}
+				activeClientAddr.Store(srcAddr)
+
+				dtlsConn := pool.pick()
+				if dtlsConn != nil {
+					_, _ = dtlsConn.Write(buf[:n])
+				}
+			}
+		}(pc, ctx)
+
+		return nil
+	}
+
+	// Legacy TCP / KCP+smux listener loop (for VLESS etc.)
 	listenAddr := fmt.Sprintf("127.0.0.1:%d", cfg.LocalPort)
 	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
+		cancel()
+		clientRunning = false
 		return fmt.Errorf("failed to listen on %s: %w", listenAddr, err)
 	}
 
 	tcpAddr, _ := listener.Addr().(*net.TCPAddr)
 	activeLocalPort = tcpAddr.Port
 	activeListener = listener
-	log.Printf("[VK TURN Client] Listening on 127.0.0.1:%d for traffic to %s (streams: %d)", activeLocalPort, peerAddr, cfg.Streams)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	clientCancel = cancel
-	clientRunning = true
+	log.Printf("[VK TURN Client] Listening TCP on 127.0.0.1:%d for traffic to %s (streams: %d)", activeLocalPort, peerAddr, cfg.Streams)
 
 	pool := &sessionPool{}
 	activePool = pool
@@ -862,6 +1053,7 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 				clientCancel = nil
 				activeListener = nil
 				activeLocalPort = 0
+				activePool = nil
 			}
 			clientMu.Unlock()
 		}()
@@ -921,6 +1113,9 @@ func GetVkTurnLocalPort() int {
 func GetVkTurnActiveStreams() int {
 	clientMu.Lock()
 	defer clientMu.Unlock()
+	if activeDtlsPool != nil {
+		return activeDtlsPool.count()
+	}
 	if activePool != nil {
 		return activePool.count()
 	}

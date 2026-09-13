@@ -94,9 +94,8 @@ func (p *sessionPool) pick() *smux.Session {
 }
 
 type dtlsPool struct {
-	mu      sync.RWMutex
-	conns   []net.Conn
-	current uint64
+	mu    sync.RWMutex
+	conns []net.Conn
 }
 
 func (p *dtlsPool) add(c net.Conn) {
@@ -122,14 +121,16 @@ func (p *dtlsPool) count() int {
 	return len(p.conns)
 }
 
+// pick returns the primary (first) connection for sticky routing.
+// WireGuard requires all packets to flow through a single transport path
+// to avoid reordering, which would cause the kernel to drop packets.
 func (p *dtlsPool) pick() net.Conn {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if len(p.conns) == 0 {
 		return nil
 	}
-	idx := atomic.AddUint64(&p.current, 1) - 1
-	return p.conns[idx%uint64(len(p.conns))]
+	return p.conns[0]
 }
 
 // Global Client Runtime State
@@ -476,13 +477,21 @@ func getTokenChain(ctx context.Context, link string, creds VKCredentials, stream
 		return "", "", nil, fmt.Errorf("missing access_token")
 	}
 
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-ctx.Done():
+		return "", "", nil, ctx.Err()
+	case <-time.After(100 * time.Millisecond):
+	}
 
 	// 2. Call preview
 	data = fmt.Sprintf("vk_join_link=https://vk.com/call/join/%s&fields=photo_200&access_token=%s", link, token1)
 	_, _ = doRequest(data, "https://api.vk.ru/method/calls.getCallPreview?v=5.275&client_id="+creds.ClientID)
 
-	time.Sleep(200 * time.Millisecond)
+	select {
+	case <-ctx.Done():
+		return "", "", nil, ctx.Err()
+	case <-time.After(200 * time.Millisecond):
+	}
 
 	// 3. Get Anonymous Token
 	data = fmt.Sprintf("vk_join_link=https://vk.com/call/join/%s&name=%s&access_token=%s", link, escapedName, token1)
@@ -528,7 +537,11 @@ func getTokenChain(ctx context.Context, link string, creds VKCredentials, stream
 		break
 	}
 
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-ctx.Done():
+		return "", "", nil, ctx.Err()
+	case <-time.After(100 * time.Millisecond):
+	}
 
 	// 4. OK Login
 	sessionData := fmt.Sprintf(`{"version":2,"device_id":"%s","client_version":1.1,"client_type":"SDK_JS"}`, uuid.New())
@@ -542,7 +555,11 @@ func getTokenChain(ctx context.Context, link string, creds VKCredentials, stream
 		return "", "", nil, fmt.Errorf("missing session_key in response")
 	}
 
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-ctx.Done():
+		return "", "", nil, ctx.Err()
+	case <-time.After(100 * time.Millisecond):
+	}
 
 	// 5. Join Conversation -> TURN Credentials
 	data = fmt.Sprintf("joinLink=%s&isVideo=false&protocolVersion=5&capabilities=2F7F&anonymToken=%s&method=vchat.joinConversationByLink&format=JSON&application_key=CGMMEJLGDIHBABABA&session_key=%s", link, token2, token3)
@@ -769,7 +786,7 @@ func maintainDtlsSession(ctx context.Context, cfg *ClientConfig, peer *net.UDPAd
 		rxDone := make(chan struct{})
 		go func(c net.Conn) {
 			defer close(rxDone)
-			rxBuf := make([]byte, 2048)
+			rxBuf := make([]byte, 65535)
 			for {
 				n, rErr := c.Read(rxBuf)
 				if rErr != nil {
@@ -994,7 +1011,8 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 				clientMu.Unlock()
 			}()
 
-			buf := make([]byte, 2048)
+			buf := make([]byte, 65535)
+			var stickyConn net.Conn
 			for {
 				n, srcAddr, rErr := conn.ReadFrom(buf)
 				if rErr != nil {
@@ -1002,9 +1020,20 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 				}
 				activeClientAddr.Store(srcAddr)
 
-				dtlsConn := pool.pick()
-				if dtlsConn != nil {
-					_, _ = dtlsConn.Write(buf[:n])
+				// Refresh sticky conn if not set yet.
+				if stickyConn == nil {
+					stickyConn = pool.pick()
+				}
+				if stickyConn != nil {
+					if _, werr := stickyConn.Write(buf[:n]); werr != nil {
+						// Primary conn is dead — evict it and immediately
+						// promote the next one so the WG session survives.
+						pool.remove(stickyConn)
+						stickyConn = pool.pick()
+						if stickyConn != nil {
+							_, _ = stickyConn.Write(buf[:n])
+						}
+					}
 				}
 			}
 		}(pc, ctx)

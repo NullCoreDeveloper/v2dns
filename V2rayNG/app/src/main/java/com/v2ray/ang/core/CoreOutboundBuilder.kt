@@ -305,7 +305,7 @@ object CoreOutboundBuilder {
                     peer.preSharedKey = profileItem.preSharedKey?.nullIfBlank()
                     peer.endpoint = "$targetAddress:$targetPort"
                 }
-                wireguard.mtu = profileItem.mtu ?: 1280
+                wireguard.mtu = minOf(profileItem.mtu ?: 1280, 1280)
                 wireguard.reserved = profileItem.reserved?.takeIf { it.isNotBlank() }?.split(",")?.filter { it.isNotBlank() }?.map { it.trim().toInt() }
             }
             outbound

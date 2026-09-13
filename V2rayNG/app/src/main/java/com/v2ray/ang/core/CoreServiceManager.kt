@@ -103,8 +103,13 @@ object CoreServiceManager {
      * @param context The context from which the service is stopped.
      */
     fun stopVService(context: Context) {
-        //context.toast(R.string.toast_services_stop)
         MessageUtil.sendMsg2Service(context, AppConfig.MSG_STATE_STOP, "")
+        try {
+            context.stopService(Intent(context, com.v2ray.ang.service.CoreVpnService::class.java))
+            context.stopService(Intent(context, com.v2ray.ang.service.CoreProxyOnlyService::class.java))
+        } catch (e: Exception) {
+            LogUtil.w(AppConfig.TAG, "StartCore-Manager: Failed to stop service via intent", e)
+        }
     }
 
     fun isRunning(): Boolean {
@@ -369,7 +374,8 @@ object CoreServiceManager {
      * @return True if the core was stopped successfully, false otherwise.
      */
     fun stopCoreLoop(): Boolean {
-        val service = getService() ?: return false
+        val service = getService()
+        val appContext = service ?: com.v2ray.ang.AngApplication.applicationContext
 
         if (currentConfig?.configType == EConfigType.MDNS) {
             LogUtil.i(AppConfig.TAG, "StartCore-Manager: Stopping MasterDNSVPN client")
@@ -407,13 +413,16 @@ object CoreServiceManager {
             }
         }
 
-        MessageUtil.sendMsg2UI(service, AppConfig.MSG_STATE_STOP_SUCCESS, "")
+        currentConfig = null
+        MessageUtil.sendMsg2UI(appContext, AppConfig.MSG_STATE_STOP_SUCCESS, "")
         NotificationManager.cancelNotification()
 
-        try {
-            service.unregisterReceiver(mMsgReceive)
-        } catch (e: Exception) {
-            LogUtil.e(AppConfig.TAG, "StartCore-Manager: Failed to unregister receiver", e)
+        if (service != null) {
+            try {
+                service.unregisterReceiver(mMsgReceive)
+            } catch (e: Exception) {
+                LogUtil.e(AppConfig.TAG, "StartCore-Manager: Failed to unregister receiver", e)
+            }
         }
 
         return true

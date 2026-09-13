@@ -50,10 +50,14 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
     val mainViewModel: MainViewModel by viewModels()
     private lateinit var groupPagerAdapter: GroupPagerAdapter
     private var tabMediator: TabLayoutMediator? = null
+    private var isConnecting: Boolean = false
 
     private val requestVpnPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         if (it.resultCode == RESULT_OK) {
             startV2Ray()
+        } else {
+            isConnecting = false
+            applyRunningState(isLoading = false, isRunning = mainViewModel.isRunning.value == true)
         }
     }
     private val requestActivityLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -110,6 +114,7 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
     private fun setupViewModel() {
         mainViewModel.updateTestResultAction.observe(this) { setTestState(it) }
         mainViewModel.isRunning.observe(this) { isRunning ->
+            isConnecting = false
             applyRunningState(false, isRunning)
         }
         mainViewModel.startListenBroadcast()
@@ -135,19 +140,23 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
     }
 
     private fun handleFabAction() {
-        applyRunningState(isLoading = true, isRunning = false)
-
-        if (mainViewModel.isRunning.value == true) {
+        if (mainViewModel.isRunning.value == true || isConnecting) {
+            isConnecting = false
+            applyRunningState(isLoading = false, isRunning = false)
             CoreServiceManager.stopVService(this)
-        } else if (SettingsManager.isVpnMode()) {
-            val intent = VpnService.prepare(this)
-            if (intent == null) {
-                startV2Ray()
-            } else {
-                requestVpnPermission.launch(intent)
-            }
         } else {
-            startV2Ray()
+            isConnecting = true
+            applyRunningState(isLoading = true, isRunning = false)
+            if (SettingsManager.isVpnMode()) {
+                val intent = VpnService.prepare(this)
+                if (intent == null) {
+                    startV2Ray()
+                } else {
+                    requestVpnPermission.launch(intent)
+                }
+            } else {
+                startV2Ray()
+            }
         }
     }
 
@@ -162,6 +171,8 @@ class MainActivity : HelperBaseActivity(), NavigationView.OnNavigationItemSelect
 
     private fun startV2Ray() {
         if (MmkvManager.getSelectServer().isNullOrEmpty()) {
+            isConnecting = false
+            applyRunningState(isLoading = false, isRunning = false)
             toast(R.string.title_file_chooser)
             return
         }

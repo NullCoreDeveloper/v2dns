@@ -470,8 +470,17 @@ object SettingsManager {
 
     /**
      * Get the VPN MTU from settings, defaulting to AppConfig.VPN_MTU.
+     * For VKTURN configurations, MTU is capped at 1280 to prevent UDP fragmentation over DTLS.
      */
-    fun getVpnMtu(): Int {
+    fun getVpnMtu(configType: com.v2ray.ang.enums.EConfigType? = null): Int {
+        if (configType == com.v2ray.ang.enums.EConfigType.VKTURN) {
+            return 1280
+        }
+        val selectGuid = MmkvManager.getSelectServer().orEmpty()
+        val current = MmkvManager.decodeServerConfig(selectGuid)
+        if (current?.configType == com.v2ray.ang.enums.EConfigType.VKTURN) {
+            return 1280
+        }
         return Utils.parseInt(MmkvManager.decodeSettingsString(AppConfig.PREF_VPN_MTU), AppConfig.VPN_MTU)
     }
 

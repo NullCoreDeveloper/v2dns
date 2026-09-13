@@ -780,10 +780,22 @@ func createRawDtlsConn(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr
 				}
 			}
 		}()
+		candTimeout := 7 * time.Second
+		candTimer := time.NewTimer(candTimeout)
 		var ar allocResult
 		select {
 		case ar = <-allocCh:
+			candTimer.Stop()
+		case <-candTimer.C:
+			turnClient.Close()
+			_ = c.Close()
+			candidateErrs = append(candidateErrs, fmt.Sprintf("%s (allocate timeout %v)", candAddr, candTimeout))
+			if candIdx < len(turnAddrs)-1 {
+				log.Printf("[STREAM %d] TURN candidate %s timed out after %v, trying next server...", streamID, candAddr, candTimeout)
+			}
+			continue
 		case <-ctx.Done():
+			candTimer.Stop()
 			turnClient.Close()
 			_ = c.Close()
 			return nil, nil, ctx.Err()
@@ -831,7 +843,7 @@ func createRawDtlsConn(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr
 		return nil, nil, fmt.Errorf("DTLS client: %w", err)
 	}
 
-	handshakeCtx, handshakeCancel := context.WithTimeout(ctx, 25*time.Second)
+	handshakeCtx, handshakeCancel := context.WithTimeout(ctx, 12*time.Second)
 	defer handshakeCancel()
 
 	handshakeDone := make(chan struct{})

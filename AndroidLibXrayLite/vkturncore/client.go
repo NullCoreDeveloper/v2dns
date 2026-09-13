@@ -1114,7 +1114,7 @@ func stopVkTurnClientLocked() {
 	}
 	clientRunning = false
 	activeLocalPort = 0
-	activeClientAddr.Store(nil)
+	activeClientAddr = atomic.Value{}
 	globalLockout.Store(0)
 	clearAllCachedCreds()
 }

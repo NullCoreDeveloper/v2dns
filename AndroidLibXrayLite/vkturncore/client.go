@@ -93,6 +93,15 @@ func (p *sessionPool) pick() *smux.Session {
 	return s
 }
 
+func (p *sessionPool) closeAll() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, s := range p.sessions {
+		_ = s.Close()
+	}
+	p.sessions = nil
+}
+
 type dtlsPool struct {
 	mu    sync.RWMutex
 	conns []net.Conn
@@ -133,6 +142,29 @@ func (p *dtlsPool) pick() net.Conn {
 	return p.conns[0]
 }
 
+func (p *dtlsPool) isAlive(c net.Conn) bool {
+	if c == nil {
+		return false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, conn := range p.conns {
+		if conn == c {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *dtlsPool) closeAll() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, c := range p.conns {
+		_ = c.Close()
+	}
+	p.conns = nil
+}
+
 // Global Client Runtime State
 var (
 	clientMu         sync.Mutex
@@ -161,7 +193,7 @@ const defaultStreamsPerCache = 12
 var (
 	credsCacheMu sync.RWMutex
 	cachedCreds  = make(map[int]turnCachedCreds) // cacheIndex -> credentials
-	vkFetchMu    sync.Mutex
+	vkFetchSem   = make(chan struct{}, 1)
 )
 
 type allocPacer struct {
@@ -356,10 +388,12 @@ func fetchVkCreds(ctx context.Context, link string, customCred *VKCredentials, s
 		log.Printf("[STREAM %d] [VK Auth] Using cached TURN credentials (cache=%d, expires in %v, server=%s)", streamID, cIdx, time.Until(c.expiresAt).Round(time.Second), addrs[0])
 		return u, p, addrs, nil
 	}
-	credsCacheMu.RUnlock()
-
-	vkFetchMu.Lock()
-	defer vkFetchMu.Unlock()
+	select {
+	case <-ctx.Done():
+		return "", "", nil, ctx.Err()
+	case vkFetchSem <- struct{}{}:
+		defer func() { <-vkFetchSem }()
+	}
 
 	// Double-check inside lock
 	credsCacheMu.RLock()
@@ -513,7 +547,7 @@ func getTokenChain(ctx context.Context, link string, creds VKCredentials, stream
 					log.Printf("[STREAM %d] [VK Captcha] Auto solve failed: %v. Triggering manual captcha fallback...", streamID, solveErr)
 					var manualErr error
 					if captchaErr.RedirectURI != "" {
-						successToken, manualErr = solveCaptchaViaProxy(captchaErr.RedirectURI)
+						successToken, manualErr = solveCaptchaViaProxy(ctx, captchaErr.RedirectURI)
 					}
 					if manualErr != nil {
 						globalLockout.Store(time.Now().Add(10 * time.Second).Unix())
@@ -677,7 +711,7 @@ func createRawDtlsConn(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr
 		}
 
 		// Allocate() has no context parameter — run in goroutine so that
-		// ctx cancellation (Stop) can interrupt it by closing the UDP conn.
+		// ctx cancellation (Stop) can interrupt it by closing the UDP conn and client.
 		type allocResult struct {
 			conn net.PacketConn
 			err  error
@@ -685,15 +719,20 @@ func createRawDtlsConn(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr
 		allocCh := make(chan allocResult, 1)
 		go func() {
 			rc, re := turnClient.Allocate()
-			allocCh <- allocResult{rc, re}
+			select {
+			case allocCh <- allocResult{rc, re}:
+			default:
+				if rc != nil {
+					_ = rc.Close()
+				}
+			}
 		}()
 		var ar allocResult
 		select {
 		case ar = <-allocCh:
 		case <-ctx.Done():
-			_ = c.Close() // force-unblock Allocate()
-			<-allocCh
 			turnClient.Close()
+			_ = c.Close()
 			return nil, nil, ctx.Err()
 		}
 		if ar.err != nil {
@@ -741,11 +780,26 @@ func createRawDtlsConn(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr
 
 	handshakeCtx, handshakeCancel := context.WithTimeout(ctx, 25*time.Second)
 	defer handshakeCancel()
+
+	handshakeDone := make(chan struct{})
+	go func() {
+		select {
+		case <-handshakeCtx.Done():
+			if ctx.Err() != nil {
+				_ = dtlsConn.Close()
+				_ = relayConn.Close()
+			}
+		case <-handshakeDone:
+		}
+	}()
+
 	if err = dtlsConn.HandshakeContext(handshakeCtx); err != nil {
+		close(handshakeDone)
 		_ = dtlsConn.Close()
 		cleanup()
 		return nil, nil, fmt.Errorf("DTLS handshake: %w", err)
 	}
+	close(handshakeDone)
 	cleanupFns = append(cleanupFns, func() { _ = dtlsConn.Close() })
 
 	return dtlsConn, cleanup, nil
@@ -931,9 +985,15 @@ func stopVkTurnClientLocked() {
 		_ = activePacketConn.Close()
 		activePacketConn = nil
 	}
+	if activeDtlsPool != nil {
+		activeDtlsPool.closeAll()
+		activeDtlsPool = nil
+	}
+	if activePool != nil {
+		activePool.closeAll()
+		activePool = nil
+	}
 	clientRunning = false
-	activePool = nil
-	activeDtlsPool = nil
 	activeLocalPort = 0
 	activeClientAddr.Store(nil)
 	globalLockout.Store(0)
@@ -1029,7 +1089,10 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 					clientCancel = nil
 					activePacketConn = nil
 					activeLocalPort = 0
-					activeDtlsPool = nil
+					if activeDtlsPool != nil {
+						activeDtlsPool.closeAll()
+						activeDtlsPool = nil
+					}
 				}
 				clientMu.Unlock()
 			}()
@@ -1043,15 +1106,16 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 				}
 				activeClientAddr.Store(srcAddr)
 
-				// Refresh sticky conn if not set yet.
-				if stickyConn == nil {
+				// Ensure stickyConn is non-nil and still alive in the active pool
+				if stickyConn == nil || !pool.isAlive(stickyConn) {
 					stickyConn = pool.pick()
 				}
 				if stickyConn != nil {
 					if _, werr := stickyConn.Write(buf[:n]); werr != nil {
-						// Primary conn is dead — evict it and immediately
-						// promote the next one so the WG session survives.
+						// Primary conn failed write — evict it immediately
+						// and pick the next active one.
 						pool.remove(stickyConn)
+						_ = stickyConn.Close()
 						stickyConn = pool.pick()
 						if stickyConn != nil {
 							_, _ = stickyConn.Write(buf[:n])
@@ -1139,15 +1203,13 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 	return nil
 }
 
-// StopVkTurnClient stops the running VK TURN client and waits for all
-// goroutines to finish (up to 3 seconds).
+// StopVkTurnClient stops the running VK TURN client and unblocks immediately.
 func StopVkTurnClient() error {
 	clientMu.Lock()
 	stopVkTurnClientLocked()
 	clientMu.Unlock()
 
-	// Wait for maintain goroutines to exit. Allocate() is interrupted by
-	// closing the UDP conn (done inside ctx-select in createRawDtlsConn).
+	// Wait up to 500ms for goroutines to clean up, but never freeze caller/UI thread
 	done := make(chan struct{})
 	go func() {
 		activeWg.Wait()
@@ -1155,8 +1217,8 @@ func StopVkTurnClient() error {
 	}()
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
-		log.Printf("[VK TURN Client] Stop: goroutines did not finish within 3s")
+	case <-time.After(500 * time.Millisecond):
+		log.Printf("[VK TURN Client] Stop: background cleanup completing asynchronously")
 	}
 	return nil
 }

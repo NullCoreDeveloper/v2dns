@@ -401,7 +401,7 @@ func startCaptchaServer(srv *http.Server, logPrefix string) error {
 	return fmt.Errorf("captcha listeners failed: %s", strings.Join(listenErrs, "; "))
 }
 
-func runCaptchaServerAndWait(handler http.Handler, captchaURL string, keyCh <-chan string, logPrefix string) (string, error) {
+func runCaptchaServerAndWait(ctx context.Context, handler http.Handler, captchaURL string, keyCh <-chan string, logPrefix string) (string, error) {
 	srv := &http.Server{Handler: handler}
 
 	if err := startCaptchaServer(srv, logPrefix); err != nil {
@@ -412,15 +412,20 @@ func runCaptchaServerAndWait(handler http.Handler, captchaURL string, keyCh <-ch
 	openBrowser(captchaURL)
 
 	select {
-	case key := <-keyCh:
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	case <-ctx.Done():
+		sctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		defer cancel()
-		_ = srv.Shutdown(ctx)
+		_ = srv.Shutdown(sctx)
+		return "", ctx.Err()
+	case key := <-keyCh:
+		sctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		_ = srv.Shutdown(sctx)
 		return key, nil
 	case <-time.After(90 * time.Second):
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		sctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		defer cancel()
-		_ = srv.Shutdown(ctx)
+		_ = srv.Shutdown(sctx)
 		return "", fmt.Errorf("manual captcha timed out after 90 seconds")
 	}
 }
@@ -434,7 +439,7 @@ func notifyKey(keyCh chan<- string, key string) {
 	}
 }
 
-func solveCaptchaViaProxy(redirectURI string) (string, error) {
+func solveCaptchaViaProxy(ctx context.Context, redirectURI string) (string, error) {
 	captchaHandlerMu.Lock()
 	h := activeCaptchaHandler
 	captchaHandlerMu.Unlock()
@@ -461,6 +466,11 @@ func solveCaptchaViaProxy(redirectURI string) (string, error) {
 
 		for {
 			select {
+			case <-ctx.Done():
+				if tokenFilePath != "" {
+					_ = os.Remove(tokenFilePath)
+				}
+				return "", ctx.Err()
 			case token := <-captchaTokenCh:
 				log.Printf("[VK Captcha] Solved in-app, token received via channel: %.15s...", token)
 				if tokenFilePath != "" {
@@ -611,10 +621,10 @@ func solveCaptchaViaProxy(redirectURI string) (string, error) {
 		proxy.ServeHTTP(w, r)
 	})
 
-	return runCaptchaServerAndWait(mux, localCaptchaURLForTarget(targetURL), keyCh, "proxy HTTP server error")
+	return runCaptchaServerAndWait(ctx, mux, localCaptchaURLForTarget(targetURL), keyCh, "proxy HTTP server error")
 }
 
-func solveCaptchaViaHTTP(captchaImg string) (string, error) {
+func solveCaptchaViaHTTP(ctx context.Context, captchaImg string) (string, error) {
 	keyCh := make(chan string, 1)
 	mux := http.NewServeMux()
 
@@ -642,7 +652,7 @@ button{font-size:24px;padding:12px 32px;margin-top:12px;cursor:pointer}</style>
 		_, _ = fmt.Fprint(w, `<!DOCTYPE html><html><body><h2>Done!</h2></body></html>`)
 	})
 
-	return runCaptchaServerAndWait(mux, localCaptchaOrigin(), keyCh, "captcha HTTP server error")
+	return runCaptchaServerAndWait(ctx, mux, localCaptchaOrigin(), keyCh, "captcha HTTP server error")
 }
 
 func openBrowser(url string) {

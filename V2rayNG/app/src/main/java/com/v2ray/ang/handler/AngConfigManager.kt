@@ -255,15 +255,18 @@ object AngConfigManager {
 
             // Parse all configs first (no I/O during parsing)
             val configs = mutableListOf<ProfileItem>()
-            servers.lines()
-                .distinct()
-                .reversed()
-                .forEach {
-                    val config = parseConfig(it, subid, subItem)
-                    if (config != null) {
-                        configs.add(config)
-                    }
+            val lines = servers.lines().distinct().reversed()
+            val hasVkTurn = lines.any { it.trim().startsWith("vkturn://", ignoreCase = true) }
+            lines.forEach { line ->
+                val trimmed = line.trim()
+                if (hasVkTurn && trimmed.startsWith("freeturn://", ignoreCase = true)) {
+                    return@forEach
                 }
+                val config = parseConfig(trimmed, subid, subItem)
+                if (config != null) {
+                    configs.add(config)
+                }
+            }
 
             // Batch save all parsed configs (only one serverList read/write)
             if (configs.isNotEmpty()) {

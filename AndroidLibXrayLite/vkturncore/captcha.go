@@ -148,6 +148,7 @@ func solvePoW(powInput string, difficulty int) string {
 type captchaBootstrap struct {
 	PowInput   string
 	Difficulty int
+	Settings   *captchaSettingsResponse
 }
 
 func fetchCaptchaBootstrap(ctx context.Context, redirectURI string, client tlsclient.HttpClient, profile Profile) (*captchaBootstrap, error) {
@@ -181,6 +182,8 @@ func fetchCaptchaBootstrap(ctx context.Context, redirectURI string, client tlscl
 	}
 	html := string(body)
 
+	settings, _ := parseCaptchaSettingsFromHTML(html)
+
 	// The PoW parameters are now obfuscated at the end of the script: }("seed", difficulty, "error_string"));
 	powInputRe := regexp.MustCompile(`\}\(["']([^"']+)["']\s*,\s*(\d+)\s*,\s*["'][^"']+["']\)\);`)
 	powInputMatch := powInputRe.FindStringSubmatch(html)
@@ -189,6 +192,7 @@ func fetchCaptchaBootstrap(ctx context.Context, redirectURI string, client tlscl
 		return &captchaBootstrap{
 			PowInput:   powInputMatch[1],
 			Difficulty: diff,
+			Settings:   settings,
 		}, nil
 	}
 
@@ -215,11 +219,12 @@ func fetchCaptchaBootstrap(ctx context.Context, redirectURI string, client tlscl
 	return &captchaBootstrap{
 		PowInput:   oldPowInputMatch[1],
 		Difficulty: difficulty,
+		Settings:   settings,
 	}, nil
 }
 
 func solveVkCaptcha(ctx context.Context, captchaErr *VkCaptchaError, streamID int, client tlsclient.HttpClient, profile Profile) (string, error) {
-	log.Printf("[STREAM %d] [VK Captcha] Auto-solving PoW captcha...", streamID)
+	log.Printf("[STREAM %d] [VK Captcha] Solving VK Smart Captcha automatically...", streamID)
 
 	if captchaErr.SessionToken == "" || captchaErr.RedirectURI == "" {
 		return "", fmt.Errorf("missing captcha session token or redirect uri")
@@ -235,6 +240,22 @@ func solveVkCaptcha(ctx context.Context, captchaErr *VkCaptchaError, streamID in
 		return "", fmt.Errorf("failed to solve PoW within limit")
 	}
 
+	// Try slider / automatic solver first (handles both checkbox and slider puzzle)
+	successToken, err := callCaptchaNotRobotWithSliderPOC(
+		ctx,
+		captchaErr.SessionToken,
+		hash,
+		streamID,
+		client,
+		profile,
+		bootstrap.Settings,
+	)
+	if err == nil && successToken != "" {
+		log.Printf("[STREAM %d] [VK Captcha] solver succeeded", streamID)
+		return successToken, nil
+	}
+
+	log.Printf("[STREAM %d] [VK Captcha] Slider solver failed: %v. Trying standard fallback...", streamID, err)
 	return callCaptchaNotRobot(ctx, captchaErr.SessionToken, hash, streamID, client, profile)
 }
 

@@ -145,6 +145,7 @@ var (
 	activeLocalPort  int
 	globalLockout    atomic.Int64
 	activeClientAddr atomic.Value // holds net.Addr
+	activeWg         sync.WaitGroup
 )
 
 type turnCachedCreds struct {
@@ -675,16 +676,36 @@ func createRawDtlsConn(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr
 			return nil, nil, ctx.Err()
 		}
 
-		rConn, err := turnClient.Allocate()
-		if err != nil {
+		// Allocate() has no context parameter — run in goroutine so that
+		// ctx cancellation (Stop) can interrupt it by closing the UDP conn.
+		type allocResult struct {
+			conn net.PacketConn
+			err  error
+		}
+		allocCh := make(chan allocResult, 1)
+		go func() {
+			rc, re := turnClient.Allocate()
+			allocCh <- allocResult{rc, re}
+		}()
+		var ar allocResult
+		select {
+		case ar = <-allocCh:
+		case <-ctx.Done():
+			_ = c.Close() // force-unblock Allocate()
+			<-allocCh
+			turnClient.Close()
+			return nil, nil, ctx.Err()
+		}
+		if ar.err != nil {
 			turnClient.Close()
 			_ = c.Close()
-			candidateErrs = append(candidateErrs, fmt.Sprintf("%s (allocate: %v)", candAddr, err))
+			candidateErrs = append(candidateErrs, fmt.Sprintf("%s (allocate: %v)", candAddr, ar.err))
 			if candIdx < len(turnAddrs)-1 {
-				log.Printf("[STREAM %d] TURN candidate %s failed (%v), trying next server...", streamID, candAddr, err)
+				log.Printf("[STREAM %d] TURN candidate %s failed (%v), trying next server...", streamID, candAddr, ar.err)
 			}
 			continue
 		}
+		rConn := ar.conn
 
 		relayConn = rConn
 		cleanupFns = append(cleanupFns, func() { _ = rConn.Close() })
@@ -986,7 +1007,9 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 
 		// Staggered session maintenance goroutines
 		for i := 0; i < cfg.Streams; i++ {
+			activeWg.Add(1)
 			go func(id int) {
+				defer activeWg.Done()
 				select {
 				case <-ctx.Done():
 					return
@@ -1060,7 +1083,9 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 
 	// Staggered session maintenance goroutines
 	for i := 0; i < cfg.Streams; i++ {
+		activeWg.Add(1)
 		go func(id int) {
+			defer activeWg.Done()
 			select {
 			case <-ctx.Done():
 				return
@@ -1114,11 +1139,25 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 	return nil
 }
 
-// StopVkTurnClient stops the running VK TURN client.
+// StopVkTurnClient stops the running VK TURN client and waits for all
+// goroutines to finish (up to 3 seconds).
 func StopVkTurnClient() error {
 	clientMu.Lock()
-	defer clientMu.Unlock()
 	stopVkTurnClientLocked()
+	clientMu.Unlock()
+
+	// Wait for maintain goroutines to exit. Allocate() is interrupted by
+	// closing the UDP conn (done inside ctx-select in createRawDtlsConn).
+	done := make(chan struct{})
+	go func() {
+		activeWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		log.Printf("[VK TURN Client] Stop: goroutines did not finish within 3s")
+	}
 	return nil
 }
 

@@ -61,21 +61,43 @@ object VkTurnFmt : FmtBase() {
 
                 val vkLink = if (jsonObject.has("vk") && !jsonObject.get("vk").isJsonNull) jsonObject.get("vk").asString else ""
                 val streams = if (jsonObject.has("n") && !jsonObject.get("n").isJsonNull) jsonObject.get("n").asInt else 10
+                val obfProfile = if (jsonObject.has("obf") && !jsonObject.get("obf").isJsonNull) jsonObject.get("obf").asString
+                    else if (jsonObject.has("obfProfile") && !jsonObject.get("obfProfile").isJsonNull) jsonObject.get("obfProfile").asString
+                    else ""
+                val obfKey = if (jsonObject.has("key") && !jsonObject.get("key").isJsonNull) jsonObject.get("key").asString
+                    else if (jsonObject.has("obfKey") && !jsonObject.get("obfKey").isJsonNull) jsonObject.get("obfKey").asString
+                    else ""
+                val clientId = if (jsonObject.has("cid") && !jsonObject.get("cid").isJsonNull) jsonObject.get("cid").asString
+                    else if (jsonObject.has("clientId") && !jsonObject.get("clientId").isJsonNull) jsonObject.get("clientId").asString
+                    else ""
+
+                val targetProtocol = if (jsonObject.has("targetProtocol") && !jsonObject.get("targetProtocol").isJsonNull) {
+                    jsonObject.get("targetProtocol").asString
+                } else if (jsonObject.has("protocol") && !jsonObject.get("protocol").isJsonNull) {
+                    jsonObject.get("protocol").asString
+                } else if (jsonObject.has("wg") && !jsonObject.get("wg").isJsonNull && jsonObject.get("wg").asString.isNotEmpty()) {
+                    "wireguard"
+                } else {
+                    "tcp"
+                }
 
                 // Synthesize JSON for vkturncore
                 val synthesized = com.google.gson.JsonObject()
                 synthesized.addProperty("server", config.server ?: "127.0.0.1")
                 synthesized.addProperty("port", config.serverPort?.toIntOrNull() ?: 443)
-                synthesized.addProperty("targetProtocol", "wireguard")
+                synthesized.addProperty("targetProtocol", targetProtocol)
                 synthesized.addProperty("vkLink", vkLink)
                 synthesized.addProperty("streams", streams)
                 synthesized.addProperty("secretKey", config.secretKey ?: "")
                 synthesized.addProperty("publicKey", config.publicKey ?: "")
                 synthesized.addProperty("address", config.localAddress ?: "10.66.0.2/32")
                 synthesized.addProperty("mtu", config.mtu ?: 1280)
+                if (obfProfile.isNotEmpty()) synthesized.addProperty("obfProfile", obfProfile)
+                if (obfKey.isNotEmpty()) synthesized.addProperty("obfKey", obfKey)
+                if (clientId.isNotEmpty()) synthesized.addProperty("clientId", clientId)
 
                 config.vkTurnRawConfig = synthesized.toString()
-                config.description = "VK TURN -> wireguard (${config.server.orEmpty()}:${config.serverPort.orEmpty()})"
+                config.description = "VK TURN -> $targetProtocol (${config.server.orEmpty()}:${config.serverPort.orEmpty()})"
                 return config
             }
 
@@ -236,7 +258,7 @@ object VkTurnFmt : FmtBase() {
             getString("reserved")?.let { config.reserved = it }
             getString("mtu")?.toIntOrNull()?.let { config.mtu = it }
 
-            val targetProtocol = getString("targetProtocol", "protocol") ?: "wireguard"
+            val targetProtocol = getString("targetProtocol", "protocol") ?: "tcp"
             config.description = "VK TURN -> $targetProtocol (${config.server.orEmpty()}:${config.serverPort.orEmpty()})"
         } catch (e: Exception) {
             android.util.Log.e(com.v2ray.ang.AppConfig.TAG, "populateProfileFromJson error", e)

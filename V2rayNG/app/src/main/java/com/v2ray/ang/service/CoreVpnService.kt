@@ -159,10 +159,14 @@ class CoreVpnService : VpnService(), ServiceControl {
             LogUtil.e(AppConfig.TAG, "StartCore-VPN: Interface not initialized")
             return
         }
-        if (!CoreServiceManager.startCoreLoop(mInterface)) {
-            LogUtil.e(AppConfig.TAG, "StartCore-VPN: Failed to start core loop")
-            stopAllService()
-            return
+        CoroutineScope(Dispatchers.IO).launch {
+            if (!CoreServiceManager.startCoreLoop(mInterface)) {
+                LogUtil.e(AppConfig.TAG, "StartCore-VPN: Failed to start core loop")
+                withContext(Dispatchers.Main) {
+                    stopAllService()
+                }
+                return@launch
+            }
         }
     }
 
@@ -405,17 +409,6 @@ class CoreVpnService : VpnService(), ServiceControl {
                             if (activeStreams > 0) {
                                 vkConnected = true
                                 break
-                            }
-                            val lastErr = try {
-                                libv2ray.Libv2ray.getVkTurnLastError()
-                            } catch (_: Exception) { "" }
-                            if (!lastErr.isNullOrEmpty()) {
-                                LogUtil.e(AppConfig.TAG, "StartCore-VPN: VK TURN fatal error: $lastErr")
-                                withContext(Dispatchers.Main) {
-                                    MessageUtil.sendMsg2UI(this@CoreVpnService, AppConfig.MSG_STATE_START_FAILURE, lastErr)
-                                    stopAllService()
-                                }
-                                return@launch
                             }
                             val isRunning = try {
                                 libv2ray.Libv2ray.isVkTurnClientRunning()

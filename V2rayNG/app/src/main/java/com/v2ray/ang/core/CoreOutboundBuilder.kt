@@ -259,7 +259,7 @@ object CoreOutboundBuilder {
         if (!rawJson.isNullOrEmpty()) {
             VkTurnFmt.populateProfileFromJson(profileItem, rawJson)
         }
-        var targetProtocol = "wireguard"
+        var targetProtocol = "tcp"
         if (!rawJson.isNullOrEmpty()) {
             try {
                 val jsonObject = com.google.gson.JsonParser.parseString(rawJson).asJsonObject
@@ -267,6 +267,8 @@ object CoreOutboundBuilder {
                     targetProtocol = jsonObject.get("targetProtocol").asString.lowercase()
                 } else if (jsonObject.has("protocol") && !jsonObject.get("protocol").isJsonNull) {
                     targetProtocol = jsonObject.get("protocol").asString.lowercase()
+                } else if (jsonObject.has("wg") && !jsonObject.get("wg").isJsonNull && jsonObject.get("wg").asString.isNotEmpty()) {
+                    targetProtocol = "wireguard"
                 }
             } catch (e: Exception) {
                 LogUtil.e(AppConfig.TAG, "toOutboundVkTurn parse error", e)

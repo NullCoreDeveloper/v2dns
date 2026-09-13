@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/2dust/AndroidLibXrayLite/vkturncore/wire"
 	fhttp "github.com/bogdanfinn/fhttp"
 	tlsclient "github.com/bogdanfinn/tls-client"
 	"github.com/bogdanfinn/tls-client/profiles"
@@ -90,6 +92,8 @@ type ClientConfig struct {
 	ClientId       string `json:"clientId"`
 	ClientPassword string `json:"clientPassword"`
 	LocalPort      int    `json:"localPort"`
+	ObfProfile     string `json:"obfProfile"`
+	ObfKey         string `json:"obfKey"`
 }
 
 type sessionPool struct {
@@ -273,10 +277,7 @@ func (p *allocPacer) slot() time.Time {
 }
 
 func getCacheIndex(streamID int) int {
-	if streamID <= 1 {
-		return 0
-	}
-	return (streamID - 1) / defaultStreamsPerCache
+	return 0
 }
 
 func orderAddrs(addrs []string, streamID int) []string {
@@ -394,22 +395,27 @@ func (c *connectedUDPConn) WriteTo(p []byte, _ net.Addr) (int, error) {
 	return c.Write(p)
 }
 
-type relayPacketConn struct {
-	relay net.PacketConn
-	peer  net.Addr
-}
+const (
+	modeUDP byte = 1
+	modeTCP byte = 2
+)
 
-func (r *relayPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
-	return r.relay.ReadFrom(b)
+// writeClientID sends Client ID (1 byte length + clientID + 1 byte mode).
+func writeClientID(conn net.Conn, clientID string, mode byte) error {
+	if clientID == "" {
+		return nil
+	}
+	b := []byte(clientID)
+	if len(b) > 255 {
+		b = b[:255]
+	}
+	buf := make([]byte, 1+len(b)+1)
+	buf[0] = byte(len(b))
+	copy(buf[1:], b)
+	buf[1+len(b)] = mode
+	_, err := conn.Write(buf)
+	return err
 }
-func (r *relayPacketConn) WriteTo(b []byte, _ net.Addr) (int, error) {
-	return r.relay.WriteTo(b, r.peer)
-}
-func (r *relayPacketConn) Close() error                       { return r.relay.Close() }
-func (r *relayPacketConn) LocalAddr() net.Addr                { return r.relay.LocalAddr() }
-func (r *relayPacketConn) SetDeadline(t time.Time) error      { return r.relay.SetDeadline(t) }
-func (r *relayPacketConn) SetReadDeadline(t time.Time) error  { return r.relay.SetReadDeadline(t) }
-func (r *relayPacketConn) SetWriteDeadline(t time.Time) error { return r.relay.SetWriteDeadline(t) }
 
 func fetchVkCreds(ctx context.Context, link string, customCred *VKCredentials, streamID int) (string, string, []string, error) {
 	if time.Now().Unix() < globalLockout.Load() {
@@ -830,7 +836,31 @@ func createRawDtlsConn(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr
 		return nil, nil, fmt.Errorf("generate TLS cert: %w", err)
 	}
 
-	dtlsPC := &relayPacketConn{relay: relayConn, peer: peer}
+	var codec wire.Codec
+	profile := cfg.ObfProfile
+	if profile == "" && cfg.ObfKey != "" {
+		profile = wire.ProfileRTPOpus3
+	}
+	if profile != "" && profile != wire.ProfileNone {
+		var keyBytes []byte
+		if cfg.ObfKey != "" {
+			var kErr error
+			keyBytes, kErr = hex.DecodeString(cfg.ObfKey)
+			if kErr != nil {
+				log.Printf("[STREAM %d] [wire] Failed to hex-decode obfKey: %v, attempting raw bytes", streamID, kErr)
+				keyBytes = []byte(cfg.ObfKey)
+			}
+		}
+		var cErr error
+		codec, cErr = wire.NewClientCodec(profile, keyBytes)
+		if cErr != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("init obf codec %q: %w", profile, cErr)
+		}
+		log.Printf("[STREAM %d] [wire] Initialized obf codec %q (keyLen=%d)", streamID, profile, len(keyBytes))
+	}
+
+	dtlsPC := &wire.RelayPacketConn{Relay: relayConn, Peer: peer, Codec: codec}
 	dtlsConn, err := dtls.ClientWithOptions(dtlsPC, peer,
 		dtls.WithCertificates(cert),
 		dtls.WithInsecureSkipVerify(true),
@@ -884,6 +914,11 @@ func createSmuxSession(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr
 		}
 	}
 
+	if err := writeClientID(dtlsConn, cfg.ClientId, modeTCP); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("write client ID: %w", err)
+	}
+
 	kcpSess, err := NewKCPOverDTLS(dtlsConn, false)
 	if err != nil {
 		cleanup()
@@ -901,7 +936,7 @@ func createSmuxSession(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr
 	return smuxSess, cleanup, nil
 }
 
-func maintainDtlsSession(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr, id int, pool *dtlsPool, pc net.PacketConn) {
+func maintainDtlsSession(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr, id int, pool *dtlsPool, pc net.PacketConn, onFirstReady func()) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -926,7 +961,11 @@ func maintainDtlsSession(ctx context.Context, cfg *ClientConfig, peer *net.UDPAd
 			continue
 		}
 
+		_ = writeClientID(conn, cfg.ClientId, modeUDP)
 		pool.add(conn)
+		if onFirstReady != nil {
+			onFirstReady()
+		}
 		log.Printf("[STREAM %d] Connected to VK TURN UDP tunnel (active: %d)", id, pool.count())
 
 		rxDone := make(chan struct{})
@@ -966,7 +1005,7 @@ func maintainDtlsSession(ctx context.Context, cfg *ClientConfig, peer *net.UDPAd
 	}
 }
 
-func maintainSession(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr, id int, pool *sessionPool) {
+func maintainSession(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr, id int, pool *sessionPool, onFirstReady func()) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -992,6 +1031,9 @@ func maintainSession(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr, 
 		}
 
 		pool.add(sess)
+		if onFirstReady != nil {
+			onFirstReady()
+		}
 		log.Printf("[STREAM %d] Connected to VK TURN tunnel (active: %d)", id, pool.count())
 
 		for !sess.IsClosed() {
@@ -1080,7 +1122,14 @@ func stopVkTurnClientLocked() {
 // StartVkTurnClient starts the VK TURN client tunnel.
 func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string) error {
 	clientMu.Lock()
-	defer clientMu.Unlock()
+	unlocked := false
+	unlock := func() {
+		if !unlocked {
+			clientMu.Unlock()
+			unlocked = true
+		}
+	}
+	defer unlock()
 
 	globalConfigDir = configDir
 	setVkTurnLastError("")
@@ -1120,11 +1169,22 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 		return fmt.Errorf("failed to resolve target server %s: %w", peerAddr, err)
 	}
 
-	isWireguard := (cfg.TargetProtocol == "wireguard" || cfg.TargetProtocol == "udp" || cfg.TargetProtocol == "")
+	isWireguard := (cfg.TargetProtocol == "wireguard" || cfg.TargetProtocol == "udp")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	clientCancel = cancel
 	clientRunning = true
+
+	firstStreamReady := make(chan struct{}, 1)
+	var firstReadyOnce sync.Once
+	markReady := func() {
+		firstReadyOnce.Do(func() {
+			select {
+			case firstStreamReady <- struct{}{}:
+			default:
+			}
+		})
+	}
 
 	if isWireguard {
 		listenAddr := fmt.Sprintf("127.0.0.1:%d", cfg.LocalPort)
@@ -1153,7 +1213,7 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 					return
 				case <-time.After(time.Duration(id) * 350 * time.Millisecond):
 				}
-				maintainDtlsSession(ctx, &cfg, peerUDP, id+1, pool, pc)
+				maintainDtlsSession(ctx, &cfg, peerUDP, id+1, pool, pc, markReady)
 			}(i)
 		}
 
@@ -1192,83 +1252,98 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 				}
 			}
 		}(pc, ctx)
+	} else {
+		// TCP / KCP+smux listener loop (default for VLESS, shadowsocks, trojan, etc.)
+		listenAddr := fmt.Sprintf("127.0.0.1:%d", cfg.LocalPort)
+		listener, err := net.Listen("tcp", listenAddr)
+		if err != nil {
+			cancel()
+			clientRunning = false
+			return fmt.Errorf("failed to listen on %s: %w", listenAddr, err)
+		}
 
-		return nil
-	}
+		tcpAddr, _ := listener.Addr().(*net.TCPAddr)
+		activeLocalPort = tcpAddr.Port
+		activeListener = listener
+		log.Printf("[VK TURN Client] Listening TCP on 127.0.0.1:%d for traffic to %s (streams: %d)", activeLocalPort, peerAddr, cfg.Streams)
 
-	// Legacy TCP / KCP+smux listener loop (for VLESS etc.)
-	listenAddr := fmt.Sprintf("127.0.0.1:%d", cfg.LocalPort)
-	listener, err := net.Listen("tcp", listenAddr)
-	if err != nil {
-		cancel()
-		clientRunning = false
-		return fmt.Errorf("failed to listen on %s: %w", listenAddr, err)
-	}
+		pool := &sessionPool{}
+		activePool = pool
 
-	tcpAddr, _ := listener.Addr().(*net.TCPAddr)
-	activeLocalPort = tcpAddr.Port
-	activeListener = listener
-	log.Printf("[VK TURN Client] Listening TCP on 127.0.0.1:%d for traffic to %s (streams: %d)", activeLocalPort, peerAddr, cfg.Streams)
+		// Staggered session maintenance goroutines
+		for i := 0; i < cfg.Streams; i++ {
+			activeWg.Add(1)
+			go func(id int) {
+				defer activeWg.Done()
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Duration(id) * 350 * time.Millisecond):
+				}
+				maintainSession(ctx, &cfg, peerUDP, id+1, pool, markReady)
+			}(i)
+		}
 
-	pool := &sessionPool{}
-	activePool = pool
+		// Local listener loop
+		go func(l net.Listener, c context.Context) {
+			defer func() {
+				_ = l.Close()
+				clientMu.Lock()
+				if activeListener == l {
+					clientRunning = false
+					clientCancel = nil
+					activeListener = nil
+					activeLocalPort = 0
+					activePool = nil
+				}
+				clientMu.Unlock()
+			}()
 
-	// Staggered session maintenance goroutines
-	for i := 0; i < cfg.Streams; i++ {
-		activeWg.Add(1)
-		go func(id int) {
-			defer activeWg.Done()
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(time.Duration(id) * 350 * time.Millisecond):
-			}
-			maintainSession(ctx, &cfg, peerUDP, id+1, pool)
-		}(i)
-	}
-
-	// Local listener loop
-	go func(l net.Listener, c context.Context) {
-		defer func() {
-			_ = l.Close()
-			clientMu.Lock()
-			if activeListener == l {
-				clientRunning = false
-				clientCancel = nil
-				activeListener = nil
-				activeLocalPort = 0
-				activePool = nil
-			}
-			clientMu.Unlock()
-		}()
-
-		for {
-			conn, err := l.Accept()
-			if err != nil {
-				return
-			}
-
-			sess := pool.pick()
-			if sess == nil || sess.IsClosed() {
-				log.Printf("[VK TURN Client] No active VK TURN sessions available, rejecting connection")
-				_ = conn.Close()
-				continue
-			}
-
-			go func(c net.Conn, s *smux.Session) {
-				defer c.Close()
-				stream, err := s.OpenStream()
+			for {
+				conn, err := l.Accept()
 				if err != nil {
-					log.Printf("[VK TURN Client] smux open stream error: %v", err)
 					return
 				}
-				defer stream.Close()
-				pipe(ctx, c, stream)
-			}(conn, sess)
-		}
-	}(listener, ctx)
 
-	return nil
+				sess := pool.pick()
+				if sess == nil || sess.IsClosed() {
+					log.Printf("[VK TURN Client] No active VK TURN sessions available, rejecting connection")
+					_ = conn.Close()
+					continue
+				}
+
+				go func(c net.Conn, s *smux.Session) {
+					defer c.Close()
+					stream, err := s.OpenStream()
+					if err != nil {
+						log.Printf("[VK TURN Client] smux open stream error: %v", err)
+						return
+					}
+					defer stream.Close()
+					pipe(ctx, c, stream)
+				}(conn, sess)
+			}
+		}(listener, ctx)
+	}
+
+	unlock()
+
+	// Wait for the first stream to be established before reporting success to caller/Android
+	select {
+	case <-firstStreamReady:
+		log.Printf("[VK TURN Client] First stream established! Tunnel is ready.")
+		return nil
+	case <-ctx.Done():
+		clientMu.Lock()
+		stopVkTurnClientLocked()
+		clientMu.Unlock()
+		return fmt.Errorf("cancelled while waiting for first stream: %w", ctx.Err())
+	case <-time.After(25 * time.Second):
+		clientMu.Lock()
+		stopVkTurnClientLocked()
+		clientMu.Unlock()
+		return fmt.Errorf("timeout waiting for first VK TURN stream")
+	}
 }
 
 // StopVkTurnClient stops the running VK TURN client and unblocks immediately.
@@ -1291,11 +1366,20 @@ func StopVkTurnClient() error {
 	return nil
 }
 
-// IsVkTurnClientRunning returns true if the client is active.
+// IsVkTurnClientRunning returns true if the client is active and has at least one active stream.
 func IsVkTurnClientRunning() bool {
 	clientMu.Lock()
 	defer clientMu.Unlock()
-	return clientRunning
+	if !clientRunning {
+		return false
+	}
+	if activeDtlsPool != nil && activeDtlsPool.count() > 0 {
+		return true
+	}
+	if activePool != nil && activePool.count() > 0 {
+		return true
+	}
+	return false
 }
 
 // GetVkTurnLocalPort returns the active local listening port.

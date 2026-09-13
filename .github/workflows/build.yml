@@ -87,7 +87,7 @@ jobs:
       if: steps.cache-libv2ray-restore.outputs.cache-hit != 'true'
       uses: actions/setup-go@v5
       with:
-        go-version: '1.24'
+        go-version: '1.26'
         cache: false
 
     - name: Install gomobile

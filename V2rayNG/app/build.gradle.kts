@@ -12,8 +12,8 @@ android {
         applicationId = "com.v2dns.ang"
         minSdk = 24
         targetSdk = 37
-        versionCode = 730
-        versionName = "1.0.1"
+        versionCode = 732
+        versionName = "1.1.2"
         multiDexEnabled = true
 
         val abiFilterList = (properties["ABI_FILTERS"] as? String)?.split(';')

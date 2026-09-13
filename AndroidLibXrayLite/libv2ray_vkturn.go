@@ -33,6 +33,11 @@ func GetVkTurnActiveStreams() int {
 	return vkturncore.GetVkTurnActiveStreams()
 }
 
+// GetVkTurnLastError returns the last fatal error message, if any.
+func GetVkTurnLastError() string {
+	return vkturncore.GetVkTurnLastError()
+}
+
 // CaptchaHandler defines callback interface for manual captcha solving.
 type CaptchaHandler interface {
 	OpenCaptcha(url string)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -33,11 +34,49 @@ type VKCredentials struct {
 }
 
 var defaultVkCredentials = []VKCredentials{
-	{ClientID: "6287487", ClientSecret: "QbYic1K3lEV5kTGiqlq2"},  // VK_WEB_APP_ID
-	{ClientID: "7879029", ClientSecret: "aR5NKGmm03GYrCiNKsaw"},  // VK_MVK_APP_ID
-	{ClientID: "52461373", ClientSecret: "o557NLIkAErNhakXrQ7A"}, // VK_WEB_VKVIDEO_APP_ID
-	{ClientID: "52649896", ClientSecret: "WStp4ihWG4l3nmXZgIbC"}, // VK_MVK_VKVIDEO_APP_ID
-	{ClientID: "51781872", ClientSecret: "IjjCNl4L4Tf5QZEXIHKK"}, // VK_ID_AUTH_APP
+	{ClientID: "6287487", ClientSecret: "QbYic1K3lEV5kTGiqlq2"},  // VK Web
+	{ClientID: "7879029", ClientSecret: "aR5NKGmm03GYrCiNKsaw"},  // VK MVK
+	{ClientID: "2274003", ClientSecret: "hHbZxrka2uZ6jB1inYsH"},  // VK Android
+	{ClientID: "51453752", ClientSecret: "4UyuCUsdK8pVCNoeQuGi"}, // VK Desktop
+	{ClientID: "3140623", ClientSecret: "VeWdmVclDCtn6ihuP1nt"},  // VK iOS
+}
+
+const vkApiVersion = "5.282"
+
+var (
+	ErrInvalidJoinLink = errors.New("INVALID_JOIN_LINK: join link is expired or not valid (VK error 9008)")
+	lastVkTurnError    string
+	lastErrorMu        sync.RWMutex
+)
+
+func setVkTurnLastError(errStr string) {
+	lastErrorMu.Lock()
+	lastVkTurnError = errStr
+	lastErrorMu.Unlock()
+}
+
+// GetVkTurnLastError returns the last fatal error message, if any.
+func GetVkTurnLastError() string {
+	lastErrorMu.RLock()
+	defer lastErrorMu.RUnlock()
+	return lastVkTurnError
+}
+
+func isFatalLinkError(errObj map[string]interface{}) bool {
+	code := 0
+	if c, ok := errObj["error_code"].(float64); ok {
+		code = int(c)
+	} else if c, ok := errObj["error_code"].(int); ok {
+		code = c
+	}
+	msg := ""
+	if m, ok := errObj["error_msg"].(string); ok {
+		msg = strings.ToLower(m)
+	}
+	if code == 9000 || code == 9008 || strings.Contains(msg, "not valid") || strings.Contains(msg, "not found") {
+		return true
+	}
+	return false
 }
 
 type ClientConfig struct {
@@ -431,6 +470,12 @@ func fetchVkCreds(ctx context.Context, link string, customCred *VKCredentials, s
 		}
 		lastErr = err
 		log.Printf("[STREAM %d] [VK Auth] Creds failed (%s): %v", streamID, creds.ClientID, err)
+		if errors.Is(err, ErrInvalidJoinLink) {
+			errMsg := "Ссылка на звонок VK недействительна или звонок завершён (код 9008). Создайте новый звонок на vk.com/calls и укажите новую ссылку в конфиге!"
+			setVkTurnLastError(errMsg)
+			log.Printf("[STREAM %d] [VK Auth] FATAL: %s", streamID, errMsg)
+			return "", "", nil, ErrInvalidJoinLink
+		}
 	}
 
 	return "", "", nil, fmt.Errorf("all VK credentials failed for cache %d: %w", cIdx, lastErr)
@@ -519,8 +564,13 @@ func getTokenChain(ctx context.Context, link string, creds VKCredentials, stream
 	}
 
 	// 2. Call preview
-	data = fmt.Sprintf("vk_join_link=https://vk.com/call/join/%s&fields=photo_200&access_token=%s", link, token1)
-	_, _ = doRequest(data, "https://api.vk.ru/method/calls.getCallPreview?v=5.275&client_id="+creds.ClientID)
+	data = fmt.Sprintf("vk_join_link=https://vk.ru/call/join/%s&fields=photo_200&access_token=%s", link, token1)
+	previewResp, _ := doRequest(data, "https://api.vk.ru/method/calls.getCallPreview?v="+vkApiVersion+"&client_id="+creds.ClientID)
+	if previewErrObj, hasErr := previewResp["error"].(map[string]interface{}); hasErr {
+		if isFatalLinkError(previewErrObj) {
+			return "", "", nil, ErrInvalidJoinLink
+		}
+	}
 
 	select {
 	case <-ctx.Done():
@@ -529,8 +579,8 @@ func getTokenChain(ctx context.Context, link string, creds VKCredentials, stream
 	}
 
 	// 3. Get Anonymous Token
-	data = fmt.Sprintf("vk_join_link=https://vk.com/call/join/%s&name=%s&access_token=%s", link, escapedName, token1)
-	urlAddr := fmt.Sprintf("https://api.vk.ru/method/calls.getAnonymousToken?v=5.275&client_id=%s", creds.ClientID)
+	data = fmt.Sprintf("vk_join_link=https://vk.ru/call/join/%s&name=%s&access_token=%s", link, escapedName, token1)
+	urlAddr := fmt.Sprintf("https://api.vk.ru/method/calls.getAnonymousToken?v=%s&client_id=%s", vkApiVersion, creds.ClientID)
 
 	var token2 string
 	for attempt := 0; attempt < 3; attempt++ {
@@ -554,9 +604,12 @@ func getTokenChain(ctx context.Context, link string, creds VKCredentials, stream
 						return "", "", nil, fmt.Errorf("manual captcha failed: %w", manualErr)
 					}
 				}
-				data = fmt.Sprintf("vk_join_link=https://vk.com/call/join/%s&name=%s&captcha_key=&captcha_sid=%s&is_sound_captcha=0&success_token=%s&captcha_ts=%s&captcha_attempt=%s&access_token=%s",
+				data = fmt.Sprintf("vk_join_link=https://vk.ru/call/join/%s&name=%s&captcha_key=&captcha_sid=%s&is_sound_captcha=0&success_token=%s&captcha_ts=%s&captcha_attempt=%s&access_token=%s",
 					link, escapedName, captchaErr.CaptchaSid, neturl.QueryEscape(successToken), captchaErr.CaptchaTs, captchaErr.CaptchaAttempt, token1)
 				continue
+			}
+			if isFatalLinkError(errObj) {
+				return "", "", nil, ErrInvalidJoinLink
 			}
 			return "", "", nil, fmt.Errorf("VK API error: %v", errObj)
 		}
@@ -846,11 +899,17 @@ func maintainDtlsSession(ctx context.Context, cfg *ClientConfig, peer *net.UDPAd
 
 		conn, cleanup, err := createRawDtlsConn(ctx, cfg, peer, id)
 		if err != nil {
-			log.Printf("[STREAM %d] Setup DTLS error: %v, retrying in 3s...", id, err)
+			retryDelay := 3 * time.Second
+			if errors.Is(err, ErrInvalidJoinLink) {
+				log.Printf("[STREAM %d] Setup DTLS error: VK call link is invalid or expired. Waiting 30s...", id)
+				retryDelay = 30 * time.Second
+			} else {
+				log.Printf("[STREAM %d] Setup DTLS error: %v, retrying in 3s...", id, err)
+			}
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(3 * time.Second):
+			case <-time.After(retryDelay):
 			}
 			continue
 		}
@@ -905,11 +964,17 @@ func maintainSession(ctx context.Context, cfg *ClientConfig, peer *net.UDPAddr, 
 
 		sess, cleanup, err := createSmuxSession(ctx, cfg, peer, id)
 		if err != nil {
-			log.Printf("[STREAM %d] Setup error: %v, retrying in 3s...", id, err)
+			retryDelay := 3 * time.Second
+			if errors.Is(err, ErrInvalidJoinLink) {
+				log.Printf("[STREAM %d] Setup error: VK call link is invalid or expired. Waiting 30s...", id)
+				retryDelay = 30 * time.Second
+			} else {
+				log.Printf("[STREAM %d] Setup error: %v, retrying in 3s...", id, err)
+			}
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(3 * time.Second):
+			case <-time.After(retryDelay):
 			}
 			continue
 		}
@@ -1006,6 +1071,7 @@ func StartVkTurnClient(configJsonBase64 string, logPath string, configDir string
 	defer clientMu.Unlock()
 
 	globalConfigDir = configDir
+	setVkTurnLastError("")
 
 	if clientRunning {
 		log.Printf("[VK TURN Client] Existing client is running, stopping it before starting new one...")

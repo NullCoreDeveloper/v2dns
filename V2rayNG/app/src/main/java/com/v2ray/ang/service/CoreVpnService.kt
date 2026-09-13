@@ -405,6 +405,17 @@ class CoreVpnService : VpnService(), ServiceControl {
                                 vkConnected = true
                                 break
                             }
+                            val lastErr = try {
+                                libv2ray.Libv2ray.getVkTurnLastError()
+                            } catch (_: Exception) { "" }
+                            if (!lastErr.isNullOrEmpty()) {
+                                LogUtil.e(AppConfig.TAG, "StartCore-VPN: VK TURN fatal error: $lastErr")
+                                withContext(Dispatchers.Main) {
+                                    MessageUtil.sendMsg2UI(this@CoreVpnService, AppConfig.MSG_STATE_START_FAILURE, lastErr)
+                                    stopAllService()
+                                }
+                                return@launch
+                            }
                             val isRunning = try {
                                 libv2ray.Libv2ray.isVkTurnClientRunning()
                             } catch (_: Exception) { false }

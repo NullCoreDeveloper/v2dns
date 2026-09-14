@@ -85,7 +85,7 @@ jobs:
 
     - name: Setup Golang
       if: steps.cache-libv2ray-restore.outputs.cache-hit != 'true'
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v7
       with:
         go-version: '1.26'
         cache: false
